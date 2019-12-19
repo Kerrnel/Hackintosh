@@ -2,8 +2,8 @@
 
 Latest CLOVER folders for
 
-ASRock H370 ITX
-ASRock Z390 ITX
+ASRock H370-itx
+ASRock Z390-itx
 ASMini 300W
 Hystou 7500
 Hystou 8500
