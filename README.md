@@ -1,6 +1,6 @@
 # Ackintosh
 
-Latest CLOVER folders for
+CLOVER folders for<BR>
 <BR>
 ASRock H370-itx<BR>
 ASRock Z390-itx<BR>
