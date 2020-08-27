@@ -24,13 +24,13 @@ BTRFS Note -
 		Or diskutil info disk0sX on macOS
 
 	One can install as many Linux distros as fit on disk in one btrfs
-	volume; therefore I use subvolumes:
+	volume; therefore perhaps use subvolumes:
 		System/Debian
 		System/Ubuntu
 			... etc
 		Users (/home)
 		Applications (/opt, /usr/local)
-		Library (common scripts, configs, binaries for all - I mount in /all)
+		Library (common scripts, configs, binaries for all)
 		Cache (can throw whatever away - /var/tmp, /var/cache)
 		Variable (other common /var directories like /var/mail)
 ```
