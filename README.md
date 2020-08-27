@@ -27,6 +27,7 @@ BTRFS Note -
 	volume; therefore perhaps use subvolumes:
 		System/Debian
 		System/Ubuntu
+		System/Void
 			... etc
 		Users (/home)
 		Applications (/opt, /usr/local)
