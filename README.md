@@ -13,7 +13,7 @@ Gigabyte Brix i5
 Gigabyte Brix i7
 ```
 
-<code>
+```
 BTRFS Note - 
 	UEFI FS drivers https://efi.akeo.ie/downloads/efifs-latest/x64/
 		Or from latest refind build (good to install anyway)
@@ -33,6 +33,6 @@ BTRFS Note -
 		Library (common scripts, configs, binaries for all - I mount in /all)
 		Cache (can throw whatever away - /var/tmp, /var/cache)
 		Variable (other common /var directories like /var/mail)
-</code>
+```
 
 Latest OS - Catalina 10.15.2
