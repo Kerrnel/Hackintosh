@@ -453,7 +453,7 @@
 			<key>AppleXcpmCfgLock</key>       	<false/>
 			<key>AppleXcpmExtraMsrs</key>     	<false/>
 			<key>AppleXcpmForceBoost</key>    	<false/>
-			<key>CustomPciSerialDevice</key>		<false/>
+			<key>CustomPciSerialDevice</key>	<false/>
 			<key>CustomSMBIOSGuid</key>       	<false/>
 			<key>DisableIoMapper</key>        	<true/>
 			<key>DisableLinkeditJettison</key>	<true/>
@@ -706,8 +706,8 @@
 			<key>SystemProductName</key>	<string>Macmini8,1</string>
 			<key>MLB</key>					<string>C078429024NA8</string>
 			<key>ROM</key>					<data>HGl6YlHu</data>
-			<key>SystemSerialNumber</key>	<string>C07XKCYNJYVX</string>
-			<key>SystemUUID</key>			<string>349D869D-79E5-40A7-AAF1-E930DDB63B9A</string>
+			<key>SystemSerialNumber</key>	<string>C07XKCYNJYWY</string>
+			<key>SystemUUID</key>			<string>349D869E-79E5-40A7-AAF1-E930DDB63B9B</string>
 		</dict>
 		<key>UpdateDataHub</key>		<true/>
 		<key>UpdateNVRAM</key>			<true/>
