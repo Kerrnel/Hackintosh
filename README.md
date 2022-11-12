@@ -1,6 +1,6 @@
 # Ackintosh
 
-<H3>Latest CLOVER folders for</H3>
+<H3>Latest OpenCore folders for</H3>
 
 ```
 ASRock H370-itx
@@ -10,30 +10,11 @@ Hystou 7500
 Hystou 8500
 NUC8 i7
 Gigabyte Brix i5
-Gigabyte Brix i7
+Gigabyte Brix i7 - Runs 13.0
 ```
 
 ```
-BTRFS Note - 
-	UEFI FS drivers https://efi.akeo.ie/downloads/efifs-latest/x64/
-		Or from latest refind build (good to install anyway)
-	Volume - select it in Clover Configurator
-		Use mkfs.btrfs -L MyName /dev/xyz
-	Or use PARTUUID
-		From blkid on Linux
-		Or diskutil info disk0sX on macOS
-
-	One can install as many Linux distros as fit on disk in one btrfs
-	volume; therefore perhaps use subvolumes:
-		System/Debian
-		System/Ubuntu
-		System/Void
-			... etc
-		Users (/home)
-		Applications (/opt, /usr/local)
-		Library (common scripts, configs, binaries for all)
-		Cache (can throw whatever away - /var/tmp, /var/cache)
-		Variable (other common /var directories like /var/mail)
+Refind is included in some of these - can discard if not multibooting
 ```
 
-Latest OS - Catalina 10.15.2
+Latest OS - Ventura 13.0
