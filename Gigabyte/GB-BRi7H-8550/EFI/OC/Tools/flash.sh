@@ -1,0 +1,1 @@
+fpt.EFI -f S200.bin
