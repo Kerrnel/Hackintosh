@@ -14,7 +14,7 @@ Gigabyte Brix i7 - Runs 13.0
 ```
 
 ```
-Refind is included in some of these - can discard if not multibooting
+Refind for multibooting is included +UTILITY+ and some scripts
 ```
 
 Latest OS - Ventura 13.0
