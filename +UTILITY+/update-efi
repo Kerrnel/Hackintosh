@@ -1,0 +1,519 @@
+#!/bin/sh
+
+#############################################################################
+#
+#	Update UEFI Variables with boot loaders in a preferred order from "$ORDER"
+#
+#############################################################################
+#
+#	003	GLK	210815	sudo only if not root
+#	002	GLK	201214	Really support esp or efi
+#	001	GLK	200610	Practical rewrite of most of this to support $ORDER
+#
+
+# New method of booting ZFS with Refind -> Loader to get ZFS via loader instead of via EFI
+ZFSNeedsGrub=0
+[ -d '/boot/esp' ] && ESP='/boot/esp'
+
+[ $(id -u) -eq 0 ] && SUDO='' || SUDO=$(which 'sudo')
+
+# In order of priortiy to find/add/boot
+[ -e '/etc/uefi.conf' ] && PREORDER=$(head -n 1 '/etc/uefi.conf') || PREORDER=''
+ORDER="$1 $PREORDER Refind/Refind_x64.efi OC/OpenCore.efi Clover Grub Ubuntu Void FreeBSD/boot1.efi"
+
+
+UEFIPath()
+ {
+	local	p
+	p="$1"
+	p="${p#$ESP}"
+	echo "$p" | sed -e 's|/|\\|g'
+ }
+
+
+ESPMount()
+ {
+	local	ESP='/boot/efi'
+	[ ! -d "$ESP" -o -h "$ESP" ] && ESP=$(grep 'vfat' '/etc/fstab' | grep -i 'esp' | head -n 1 | awk '{print $2}')
+	[ ! -d "$ESP" -o -h "$ESP" ] && ESP=$(grep 'vfat' '/etc/fstab' | grep -i 'efi' | head -n 1 | awk '{print $2}')
+	[ ! -d "$ESP" -o -h "$ESP" ] && ESP=$(grep 'vfat' '/etc/fstab' | head -n 1 | awk '{print $2}')
+	[ -d "$ESP" -o -h "$ESP" ] && echo "$ESP" && return 0
+	return 1
+ }
+
+ESPDrive()
+ {
+	local p
+	local ESP=$(ESPMount)
+
+	# Get partition; remove partition # from end
+	p=$(mount | grep " on $ESP " | sed -e 's/ .*//' -e 's/[0-9]*$//')
+
+	while [ ! -e "$p" -a -n "$p" ]; do
+		p="${p%?}"
+	done
+
+	echo "$p"
+ }
+
+ESPPartNum()
+ {
+	local p
+	local ESP=$(ESPMount)
+
+	# Get partition
+	p=$(mount | grep " on $ESP " | sed -e 's/ .*//')		# FreeBSD has 'p', Darwin has 's', Linux has nothing (a-z)
+	p="${p##*[!0-9]}"
+	echo "$p"
+ }
+
+ESPPart()
+ {
+	local p
+
+	# Get partition
+	p=$(mount | grep " on $ESP " | sed -e 's/ .*//')
+
+	echo "$p"
+ }
+
+EFIOrder()
+ {
+	local i o f
+
+	o="$1"
+	f="$1"
+	shift
+	for i in "$@"; do
+		[ "$i" != "$f" ] && o="$o,$i"
+	done
+	echo "$o"
+ }
+
+HaveZFS()
+ {
+	[ $ZFSNeedsGrub -eq 0 ] && return 11
+	mount | grep -q ' zfs '
+ }
+
+
+ParseEBM()
+ {
+	local	lbl line gpt b t f p u gBn gBc gTo gBo d x
+
+	while read lbl line; do
+		case "$lbl" in
+		  'dp:'|'data:')
+			echo "Extraneous" > /dev/null
+		  ;;
+		  *:)
+			lbl="${lbl%:}"
+			case "$lbl" in
+			  BootNext)		gBn="$line"			;;
+			  BootCurrent)	gBc="$line"			;;
+			  Timeout)		gTo="$line%% *}"	;;
+			  BootOrder)	gBo="$line"			;;
+			  *) echo "Unknown global: $lbl">&2	;;
+			esac
+		  ;;
+		  *)
+			b="${lbl%\*}"
+			b="${b#Boot}"
+
+			x="$line"
+			t="${x%[!A-Za-z0-9]*HD(*}"		# Drop drive on
+			[ "$t" != "$x" ] && d='HD'
+
+			x="$t"
+			t="${x%[!A-Za-z0-9]*VenHw(*}"		# These seem to be corrupt entries
+			[ "$t" != "$x" ] && d='VH'
+			[ "$x" != "${x%%WINDOWS*}" ] && d='WIN'	# Except if Windows created it?
+
+			x="$t"
+			t="${x%[!A-Za-z0-9]*VenMedia(*}"	# Drop drive on
+			[ "$t" != "$x" ] && d='VM'
+
+			x="$t"
+			t="${x%[!A-Za-z0-9]*PciRoot(*}"	#
+			[ "$t" != "$x" ] && d='PCI'
+
+			u="${t#UEFI}"
+
+			line="${line#*HD(*GPT*,}"	# Get the drive GUID
+			line="${line#*VenHw(}"
+			line="${line#*VenMedia(}"
+
+			if [ "$t" = "$u" ]; then
+				gpt="${line%%)*}"
+				gpt="${gpt%%,*}"
+				line="${line#*File(}"
+				p=$(echo "${line%)*}" | tr '[:upper:]' '[:lower:]')
+			else
+				t=$(echo "$t" | tr : -)
+				gpt="PciRoot(${line#*PciRoot(}"
+				p='Device'
+			fi
+
+			# Last item must be path for Search above
+			echo "$b:$d:$t:$gpt:$p"
+		  ;;
+		esac
+	done
+ }
+
+EfiDupFind()
+ {
+	local	line b d t g p b16 sb16
+	local	sb="$1"
+	local	st="$2"
+	local	sg="$3"
+
+	echo "$EFIMENU" | while read line; do
+		b="${line%%:*}";	line="${line#*:}"
+		d="${line%%:*}";	line="${line#*:}"
+		t="${line%%:*}";	line="${line#*:}"
+		g="${line%%:*}";	line="${line#*:}"
+		p="${line%%:*}";
+		# Ignore lower lines
+		b16=$(echo "ibase=16;$b" | bc)
+		sb16=$(echo "ibase=16;$sb" | bc)
+		[ $b16 -gt $sb16 -a "$st" = "$t" -a "$sg" = "$g" ] && echo "$b"
+	done
+ }
+
+EfiDupList()
+ {
+	local	line b d t g p
+
+	echo "$EFIMENU" | while read line; do
+		b="${line%%:*}";	line="${line#*:}"
+		d="${line%%:*}";	line="${line#*:}"
+		t="${line%%:*}";	line="${line#*:}"
+		g="${line%%:*}";	line="${line#*:}"
+		p="${line%%:*}";
+		EfiDupFind "$b" "$t" "$g"
+	done | sort -u
+ }
+
+EfiDupRemove()
+ {
+	local	i dups
+
+	dups=$(EfiDupList)
+	echo "Will remove: "$dups
+	for i in $dups; do
+		echo "Remove: $i"
+		$SUDO efibootmgr --bootnum "$i" --delete-bootnum 
+	done
+ }
+
+EfiEntries()
+ {
+	$SUDO efibootmgr -v | sed -e 's|\\|/|g' | ParseEBM
+ }
+
+
+EfiClean1()
+ {
+	local	line p b
+
+	# Counts on last item being the path
+	while read line; do
+		p="${line#*:}"		# Second item is device
+		p="${p%%:*}"
+		if [ "$p" = "$1" ]; then
+			echo "Removing: $line" >&2
+			$SUDO efibootmgr -b "${line%%:*}" -B
+		fi
+	done
+ }
+
+EfiClean()
+ {
+	# Find binary - just path right now - return number
+	echo "$EFIMENU" | EfiClean1 "$1"
+ }
+
+
+EfiSearch1()
+ {
+	local	line p b
+
+	# Counts on last item being the path
+	while read line; do
+		p="${line##*:}"
+		b=$(basename "$p")
+#		echo "$b -> $2 ?" >&2
+		if [ "$b" = "$2" ]; then
+			d=$(dirname "$p")
+			b=$(basename "$d")
+#			echo "$b -> $1 ?" >&2
+			[ "$b" = "$1" ] && echo "${line%%:*}" && return 0
+		fi
+	done
+	return 1
+ }
+
+EfiSearch()
+ {
+	# Find binary - just path right now - return number
+	echo "$EFIMENU" | EfiSearch1 "$1" "$2"
+ }
+
+
+EfiIndex1()
+ {
+	local	n line
+	while read line; do
+		n="${line%%:*}"
+		[ "$n" = "$1" ] && echo "$line" && return 0
+	done
+	return 1
+ }
+
+EfiIndex()
+ {
+	local	n
+	n="$1"
+	while [ "${#n}" -lt 4 ]; do n="0$n"; done
+	echo "$EFIMENU" | EfiIndex1 "$n"
+ }
+
+NextAkuaEntry()
+ {
+	local	n e
+
+	OUT=''
+	n=911
+
+	[ -n "$1" ] && n=$(($1 + $n))
+
+	e=$(EfiIndex "$n")
+	while [ -n "$e" ]; do
+		echo "Not $n : [$e]" >&2
+		n=$((1 + $n))
+		e=$(EfiIndex "$n")
+	done
+	while [ "${#n}" -lt 4 ]; do n="0$n"; done
+	OUT="$n"
+ }
+
+CreateOrAddEntry()
+ {
+	local efB efD n efN err retry i
+
+	OUT=''
+
+	efN=$(dirname "$1")
+	efB=$(basename "$1" | tr '[:upper:]' '[:lower:]')
+	efD=$(dirname "$1" | tr '[:upper:]' '[:lower:]')
+
+	# Not a Dir/boot.efi format - just Dir?
+	if [ "$efD" = '.' ]; then
+		efN="$1"
+		efD="$efB"
+		# Scan .efi files; prefer grub started ones in case of many, prefer shimx64 if present over grub
+		for i in "$ESP/EFI/$efD"/*.efi "$ESP/EFI/$efD"/grub*.efi "$ESP/EFI/$efD"/shim*.efi; do if [ -e "$i" ]; then
+			efB=$(basename "$i" | tr '[:upper:]' '[:lower:]')
+		fi; done
+	fi
+
+	if [ -e "$ESP/EFI/$efD/$efB" ]; then
+		n=$(EfiSearch "$efD" "$efB")
+
+		if [ -z "$n" ]; then
+			echo "Adding entry for: $efB in $efD" >&2
+			err=1
+			retry=0
+			while [ $err != 0 -a $retry -lt 10 ]; do
+				NextAkuaEntry $retry
+				n="$OUT"
+				retry=$((1 + $retry))
+				EFIBIN=$(UEFIPath "/EFI/$efD/$efB")
+				echo "Binary: $EFIBIN as $n"
+				echo "Doing:  "$SUDO efibootmgr -c -d $(ESPDrive) -p $(ESPPartNum) -b "\"$n\"" -l "\"$EFIBIN\"" -L \""Akua $efN\"" >&2
+				$SUDO efibootmgr -c -d $(ESPDrive) -p $(ESPPartNum) -b "$n" -l "$EFIBIN" -L "Akua $efN" >&2
+				err=$?
+			done
+			EFIMENU=$(EfiEntries)
+		else
+			echo "$efD/$efB in slot $n" >&2
+		fi
+		OUT="$n"
+	else
+		echo "*** Entry: $1 not in $ESP/EFI" >&2
+		return 1
+	fi
+ }
+
+ESPS="$(ESPMount) /boot/efi or /boot/esp or $@"
+for e in $ESPS; do if [ "$e" != 'or' -a -d "$e" ]; then
+	[ ! -d "$e/EFI" ] && echo "Mounting: $e" && mount "$e"
+	[ -d "$e/EFI" ] && ESP="$e"
+fi; done
+
+[ ! -d "$ESP" ] && echo "No EFI in $ESPS?" && exit 2
+[ ! -w "$ESP" ] && echo "Restart $0 as root for $ESP write access" && exec $SUDO "$0" "$@"
+
+EFIMENU=$(EfiEntries)
+[ -z $(ESPDrive) ] && $SUDO mount "$ESP"
+[ -z $(ESPDrive) ] && echo 'Where is ESP partition - please mount in /boot/efi or /boot/esp ($ESP)' && exit 1
+
+echo "___________________________"
+echo "ESP Drive:	" $(ESPDrive)
+echo "ESP Part:	"	$(ESPPart)
+echo "ESP Mount:	" $(ESPMount)
+echo "ORDER set:	$ORDER"
+echo "---------------------------"
+
+[ "$1" = 'test' ] && echo "$EFIMENU" && exit 1
+[ "$1" = 'clean' ] && EfiClean 'VH' && exit 2
+[ "$1" = 'undup' ] && EfiDupRemove && exit 3
+[ -n "$1" ] && echo "Unknown command: $@" && exit 4
+
+EfiDupRemove
+
+order=''
+first=''
+
+for i in $ORDER; do
+	CreateOrAddEntry "$i"
+	n="$OUT"
+	if [ -n "$n" ]; then
+		if [ -z "$order" ]; then
+			first="$n"
+			order="$n"
+		else
+			order="${order},${n}"
+		fi
+	fi
+done
+
+echo "
+____________ New _____________
+Passing Next: [$first]
+Passing Order: [$order]"
+
+$SUDO efibootmgr -n "$first" -o "$order"
+
+exit 0
+
+if HaveZFS; then
+	echo "Have ZFS - Using Grub instead of Refind until ZFS UEFI 2018 driver updated"
+	EFIBIN="\\EFI\\grub\\grub_x64.efi"
+	for i in '${ESP}/EFI'/*; do
+		for g in 'grubx64' 'grub_x64'; do
+			if [ -e "$i/${g}.efi" ]; then
+				b=$(basename "$i")
+				EFIBIN="\\EFI\\${b}\\${g}.efi"
+				echo "Found grub in EFI directory $b"
+			fi
+		done
+	done
+	echo "Using EFI grub @ $EFIBIN"
+	if [ ! -e '${ESP}/grubenv' -a -e '/boot/grub/grubenv' ]; then
+		echo "Copying grubenv to EFI"
+		$SUDO cp '/boot/grub/grubenv' '${ESP}'
+	fi
+else
+	for i in \
+			"${ESP}"/[Ee][Ff][Ii]/[Cc][Ll][Oo][Vv][Ee][Rr]/[Cc][Ll][Oo][Vv][Ee][Rr][Xx]64.[Ee][Ff][Ii] \
+			"${ESP}"/[Ee][Ff][Ii]/[Rr][Ee][Ff][Ii][Nn][Dd]/[Rr][Ee][Ff][Ii][Nn][Dd]_[Xx]64.[Ee][Ff][Ii]; do
+		[ -e "$i" ] && EFIBIN=$(UEFIPath "$i") || echo "Missed: $i"
+	done
+	echo "EFI Multibooter selected: $EFIBIN"
+	[ -z "$EFIBIN" ] && echo "No multibooter found." && exit 3
+	# EFIBIN='\\EFI\\refind\\refind_x64.efi'
+fi
+
+echo '
+_____________ Before _________________'
+$SUDO efibootmgr
+
+EFIORD=$($SUDO efibootmgr | sed -n -e 's/BootOrder: //p' | sed -e 's/,/ /g')
+
+REFIND=$($SUDO efibootmgr | grep 0912 | sed -n -e 's/[Aa][Kk][Uu][Aa] [Cc][Ll][Oo][Vv][Ee][Rr].*//p' | sed -e 's/^Boot//' -e 's/ .*//' -e 's/\*.*//')
+[ -z "$REFIND" ] && REFIND=$($SUDO efibootmgr | grep '1109' | sed -n -e 's/[Aa][Kk][Uu][Aa].*//p' | sed -e 's/^Boot//' -e 's/ .*//' -e 's/\*.*//')
+[ -z "$REFIND" ] && REFIND=$($SUDO efibootmgr | sed -n -e 's/[Aa][Kk][Uu][Aa].*//p' | sed -e 's/^Boot//' -e 's/ .*//' -e 's/\*.*//')
+REAKUA="$REFIND"
+[ -z "$REFIND" ] && REFIND=$($SUDO efibootmgr | sed -n -e 's/[Rr][Ee][Ff][Ii][Nn][Dd].*//p' | sed -e 's/^Boot//' -e 's/ .*//' -e 's/\*.*//')
+[ -z "$REFIND" ] && REFIND=$($SUDO efibootmgr | sed -n -e 's/[Gg][Rr][Uu][Bb].*//p' | sed -e 's/^Boot//' -e 's/ .*//' -e 's/\*.*//')
+
+if [ -z "$REAKUAX" ]; then
+	echo "Multibooter not found in efibootmgr list
+ - creating Akua Boot entry with $EFIBIN"
+
+	echo "Executing efibootmgr -c -d $(ESPDrive) -p $(ESPPartNum) -b 1109 -l $EFIBIN -L 'Akua Boot'"
+	echo '
+_____________ Added _________________'
+	$SUDO efibootmgr -c -d $(ESPDrive) -p $(ESPPartNum) -b '1109' -l "$EFIBIN" -L 'Akua Refind'
+	REFIND='1109'
+else
+	echo 'Reactivating Bootloader'
+fi
+
+echo "
+____________ New _____________"
+$SUDO efibootmgr -n $REFIND -o $(EFIOrder $REFIND $EFIORD)
+
+# echo '============= After ================='
+# $SUDO efibootmgr
+# echo '============= After ================='
+
+# # From FreeBSD's subr_boot.c, falls through to SETENV(n,v) for name=value
+# # 157             case 'a': howto |= RB_ASKNAME; break;
+# # 158             case 'C': howto |= RB_CDROM; break;
+# # 159             case 'd': howto |= RB_KDB; break;
+# # 160             case 'D': howto |= RB_MULTIPLE; break;
+# # 161             case 'm': howto |= RB_MUTE; break;
+# # 162             case 'g': howto |= RB_GDB; break;
+# # 163             case 'h': howto |= RB_SERIAL; break;
+# # 164             case 'p': howto |= RB_PAUSE; break;
+# # 165             case 'P': howto |= RB_PROBE; break;
+# # 166             case 'r': howto |= RB_DFLTROOT; break;
+# # 167             case 's': howto |= RB_SINGLE; break;
+# # 168             case 'S': SETENV("comconsole_speed", v + 1); v += strlen(v); break;
+# # 169             case 'v': howto |= RB_VERBOSE; break;
+# 
+# menuentry "Akua SSD FreeBSD Loader" {
+# 	icon EFI/refind/icons/os_freebsd.png
+# 	loader EFI/FreeBSD/loader.efi
+# 
+# 	options "rootdev=zfs:SSD/System/FreeBSD12.1:"
+# 
+#     submenuentry "Ask name" {
+#         add_options "-a"
+#     }
+# 
+#     submenuentry "Boot verbose" {
+#         add_options "-v"
+#     }
+# 
+#     submenuentry "Boot single user" {
+#         add_options "-s"
+#     }
+# 
+#     submenuentry "Boot SSD last revision" {
+#         options "rootdev=zfs:SSD/System/FreeBSD12.0:"
+#     }
+# 
+#     submenuentry "Boot SSD last single" {
+#         options "rootdev=zfs:SSD/System/FreeBSD12.0: -s"
+#     }
+# 
+#     submenuentry "Boot SSD good revision" {
+#         options "rootdev=zfs:SSD/System/Root12.1:"
+#     }
+# 
+#     submenuentry "Boot SSD good single" {
+#         options "rootdev=zfs:SSD/System/Root12.1: -s"
+#     }
+# 
+#     submenuentry "Boot SSD next revision" {
+#         options "rootdev=zfs:SSD/System/FreeBSD12.2:"
+#     }
+# 
+#     submenuentry "Boot default device" {
+#         options ""
+#     }
+# }

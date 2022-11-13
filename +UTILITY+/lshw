@@ -1,0 +1,23 @@
+#!/bin/sh
+for i in "$@"; do
+	case "$i" in
+	  SP*)					arg="$i"						;;
+	  *air*|*wifi*)			arg='SPAirPortDataType'			;;
+	  *aud*|*snd*|sound)	arg='SPAudioDataType'			;;
+	  *blue*|*bt*)			arg='SPBluetoothDataType'		;;
+	  *cpu*|*hard*|*hw*)	arg='SPHardwareDataType'		;;
+	  *disp*|*mon*)			arg='SPDisplaysDataType'		;;
+	  *eth*|*net*)			arg='SPEthernetDataType'		;;
+	  *mem*|*ram*)			arg='SPMemoryDataType'			;;
+	  *nvm*)				arg='SPNVMeDataType'			;;
+	  *pci*)				arg='SPPCIDataType'				;;
+	  *sata*)				arg='SPSerialATADataType'		;;
+	  *sec*|*tpm*)			arg='SPSecureElementDataType'	;;
+	  *usb*)				arg='SPUSBDataType'				;;
+	  *help|*type*)			arg='-listDataTypes'			;;
+	  *)					arg='SPHardwareDataType'		;;
+	esac
+
+	echo "Showing: $arg (use type or help for list)"
+	system_profiler "$arg"
+done

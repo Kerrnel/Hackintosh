@@ -1,0 +1,19 @@
+#!/bin/sh
+L='/Applications/Utilities'
+P="${L}/terminal-notifier.app/Contents/MacOS/terminal-notifier"
+V='2.0.0/terminal-notifier-2.0.0.zip'
+
+if [ -n "$(which growlnotify 2>/dev/null)" ]; then
+	shift
+	echo "$@" | growlnotify
+elif [ ! -e "$P" ]; then
+	(
+	cd /tmp
+#	[ ! -e "$V" ] && wget "https://github.com/downloads/alloy/terminal-notifier/${V}"
+	[ ! -e "$V" ] && wget "https://github.com/julienXX/terminal-notifier/releases/download/${V}"
+	[ -e "$V" ] && [ ! -e */'terminal-notifier.app' ] && unzip "$V"
+	mv */'terminal-notifier.app' "${L}"
+	)
+fi
+
+[ -e "$P" ]	&& "${P}" "$@"

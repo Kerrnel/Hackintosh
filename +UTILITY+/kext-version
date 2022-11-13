@@ -1,0 +1,89 @@
+#!/bin/sh
+
+#
+#	001	GLK	211207	plistutil if available, BRIEF
+#
+DEBUG=0
+BRIEF=0
+
+FILE=$(which 'file' 2>/dev/null)
+PLUTIL=$(which 'plutil' 2>/dev/null)
+PLISTUTIL=$(which 'plistutil' 2>/dev/null)
+
+Msg()
+ {
+	local t
+	[ "$1" = '-' ] && shift || ([ -n "$EPOCHSECONDS" ] && t="$EPOCHSECONDS" || t=$(date +%s); t="$((1000 + ($t % 3600))): ")
+	echo "$t$@" >&2
+ }
+
+Usage()
+ {
+	Msg '-' "Usage: $0 [-a][-b][-c] kextDirOrPlist [kextDirOrPlist...]" 
+ }
+
+PLDump()
+ {
+	local ft='text'
+	[ -n "$FILE" ] && ft=$($FILE -b "$1")
+
+#	Msg "$1 type: ($ft)"
+
+	if [ "$ft" != "${ft%%text*}" ]; then
+		cat "$1"
+	elif [ -n "$PLUTIL" ]; then
+		plutil -convert xml1 -o - "$1"
+	elif [ -n "$PLISTUTIL" ]; then
+		plistutil -i "$1"
+	else
+		cat "$1"
+	fi
+ }
+
+DoIt()
+ {
+	local i f d t
+	for i in "$@"; do
+		if [ "$i" != "${i#-}" ]; then
+			i="${i#?}"
+			while [ -n "$i" ]; do
+				case "$i" in
+				  'a'*)	BRIEF=1	;;
+				  'b'*)	BRIEF=2	;;
+				  'c'*)	BRIEF=3	;;
+				esac
+				i="${i#?}"
+			done
+		else
+			[ -d "$i" ] && f="$i/Contents/Info.plist" || f="$i"
+			if [ -e "$f" ]; then
+				[ $DEBUG -gt 0 ] && Msg "Doing: $f"
+				[ $DEBUG -gt 1 ] && plutil -convert xml1 -o '/tmp/test.plist' "$f"
+				d=$(dirname "$f")
+				d=$(dirname "$d")
+				d=$(basename "$d")
+				t=$((39 - ${#d}))
+				if [ $BRIEF -lt 1 ]; then
+					printf "${d}:	"
+					while [ $t -gt 0 ]; do
+						printf "	"
+						t=$(($t - 8))
+					done
+				fi
+				vs=$(PLDump "$f" | xmlparse -m /plist/%/CFBundleShortVersionString -q -f)
+				vl=$(PLDump "$f" | xmlparse -m /plist/%/CFBundleVersion -q -f)
+				[ -z "$vs" ] && vs='NO'
+				[ -z "$vl" ] && vl='NO'
+				case $BRIEF in
+				  3)	echo "$vs"			;;
+				  2)	echo "$vl"			;;
+				  *)	echo "$vs ($vl)"	;;
+				esac
+			else
+				Msg "* No plist: $i"
+			fi
+		fi
+	done
+ }
+
+[ -z "$1" ] && Usage || DoIt "$@"

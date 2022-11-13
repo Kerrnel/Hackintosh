@@ -1,0 +1,35 @@
+#!/bin/sh
+
+MountESP()
+ {
+	case "$2" in
+	  EFI)
+		echo "Mounting $6 as $3"
+		sudo diskutil mount "$6"
+	  ;;
+	esac
+
+#	sudo mkdir -p /Volumes/ESPONSSD; sudo mount -t msdos /dev/disk0s1 /Volumes/ESPONSSD
+#	cd /Volumes/ESPONSSD/EFI
+#	ls
+ }
+
+case $(uname -s) in
+  Darwin)
+	diskutil list | grep ':.*EFI' | while read line; do
+		MountESP $line
+	done
+  ;;
+  Linux)
+	cat /etc/fstab | grep -v ^\# | while read mDev mPath mFS mOps rest; do
+		if [ "$mFS" = 'vfat' ]; then
+			echo "Mounting: $mPath"
+			sudo mkdir -p "$mPath"
+			sudo mount "$mPath"
+		fi
+	done
+  ;;
+  *)
+	echo "Need an implementation for this OS: $(uname -a)" >&2
+  ;;
+esac

@@ -1,0 +1,119 @@
+#!/bin/sh
+
+FormatUSB()
+ {
+	local	line p s lastP
+	local	bus bDrv bDev bVen
+	local	dev dPro dVen dName
+
+	while read line; do
+		p="${line%%:*}"
+		while [ "$p" != "${p# }" ]; do p="${p# }"; done
+		s="${line#*:}"
+		s="${s#* }"
+#		echo "$line [$p][$s]" >> /tmp/usb.dbg.txt
+		case "$p" in
+		  'USB')						echo '_'			;;
+
+		  # Bus
+		  'USB'*'Bus')					bus="$p"			;;
+		  'Host Controller Driver')		bDrv="$s"			;;
+		  'PCI Device ID')				bDev="${s#0x}"		;;
+		  'PCI Vendor ID')				bVen="${s#0x}"		;;
+
+		  # Device
+		  'Product ID')					dName="$lastP";	dPro="${s#0x}"		;;
+		  'Vendor ID')					dVen="${s%% *}"; dVen="${dVen#0x}"; dVN="${s##*(}"; dVN="${dVN%)*}"; [ "$dVN" = "$s" ] && dVN=''	;;
+		  'Version')					dVer="$s"			;;
+		  'Serial Number')				dSer="$s"			;;
+		  'Speed')						dSpeed="$s"			;;
+		  'Manufacturer')				dManu="$s"			;;
+		  'Location ID')				dLoc="$s"			;;
+		  'Current Available'*)			dAva="$s"			;;
+		  'Current Required'*)			dReq="$s"			;;
+		  'Extra Operating'*)			dExtra="$s"			;;
+		  'Built-In')					dInt="$s"			;;
+
+		  # Storage
+		  'Media')						inMedia=1; inVol=0	;;
+		  'Removable Media')			mRmv="$s"			;;
+		  'Logical Unit')				mLUN="$s"			;;
+		  'Partition Map Type')			mGPT="${s%% *}"		;;
+		  'S.M.A.R.T.'*)				mSmart="$s"			;;
+
+		  # Storage Volume
+		  'Volumes')					inVol=1				;;
+		  'File System')				vFS="$s"			;;
+		  'Content')					vCon="$s"			;;
+		  'Free')						vFree="${s%%B *}"	;;
+		  'Writable')					vWrite="$s"			;;
+		  'Mount Point')				vMP="$s"			;;
+
+		  'Volume UUID')
+			if [ -n "$vName" ]; then
+				nVol="  = $vName:$vWrite:$vFS:$vCon:$vFree:$vCap:$vDev:$s:$vMP"
+				[ -n "$mVol" ] && mVol="$mVol
+$nVol" || mVol="$nVol"
+				vName=''
+				vFS=''
+				vCon=''
+				vCap=''
+				vDev=''
+				vFree=''
+				vWrite=''
+				vMP=''
+			fi
+		  ;;
+
+		  'BSD Name')			[ $inVol -eq 0 ] && mDev="$s" || vDev="$s"	;;
+
+		  'Capacity')
+			if [ $inVol -eq 0 ]; then
+		  		mName="$lastP"
+		  		mCap="${s%%B *}"
+		  	else
+		  		vName="$lastP"
+		  		vCap="${s%%B *}"
+		  	fi
+		  ;;
+
+
+		  '')
+			if [ -n "$bDrv" ]; then
+				echo "> $bVen:$bDev:$bus:$bDrv"
+				bDrv=''
+			elif [ -n "$dPro" ]; then
+				echo "+ $dVen:$dPro:$dVN:$dName:$dSpeed:$dReq mA:$dInt:$dLoc"
+				dPro=''
+				if [ -n "$mCap" ]; then
+					echo " - $mName:$mCap:$mRmv:$mDev:$mGPT"
+					mCap=''
+					if [ -n "$mVol" ]; then
+						echo "$mVol"
+						mVol=''
+					fi
+				fi
+#			else
+#				echo "- Blank"
+			fi
+		  ;;
+		  *)
+			lastP="$p"
+#			echo "Unprocessed: [$line][$p][$s]"
+		esac
+	done
+ }
+
+SPType='SPUSBDataType'
+
+out=$(
+if [ "$1" = '-r' ]; then
+	system_profiler "$SPType"
+else
+	system_profiler "$SPType" | FormatUSB
+fi)
+
+echo "$out" | sudo tee '/var/run/lsusb.out'
+
+[ -e '/var/run/lsusb.last' ] && diff '/var/run/lsusb.out' '/var/run/lsusb.last' && sudo mv -f '/var/run/lsusb.last' '/var/run/lsusb.old'
+sudo mv -f '/var/run/lsusb.out' '/var/run/lsusb.last'

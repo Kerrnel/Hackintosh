@@ -1,0 +1,39 @@
+#!/bin/sh
+URL='https://github.com/Homebrew/brew.git'
+
+INSTALL='/usr/local'
+[ $(uname -m) = 'arm64' ] && INSTALL='/opt/homebrew'
+
+NoMatch()
+ {
+	local line
+	while read line; do
+#		echo "Match: $1 $line">&2
+		[ "$1" != "$line" ] && echo "$line"
+	done
+ }
+
+FixPerms()
+ {
+	for i in bin etc include lib opt share var Cellar Homebrew; do
+		if [ ! -d ${INSTALL}/$i ]; then
+			mkdir "${INSTALL}/$i" || (sudo mkdir "${INSTALL}/$i" && sudo chown $UID "${INSTALL}/$i")
+		fi
+	done
+ }
+
+BREW=$(which -a 'brew' 2>/dev/null | NoMatch "$0" | head -n 1)
+
+# echo "Using: $BREW"
+if [ -x "$BREW" ]; then
+	[ ! -e /tmp/brew.update.flag ] && touch /tmp/brew.update.flag && FixPerms && "$BREW" update
+else
+	FixPerms
+
+	chown $UID "${INSTALL}"/* || sudo chown $UID "${INSTALL}"/*
+	git clone --depth 1 "$URL" "${INSTALL}/Homebrew"
+	[ -e "${INSTALL}/Homebrew/bin/brew" -a ! -e "${INSTALL}/bin/brew" ] && ln -sf "${INSTALL}/Homebrew/bin/brew" "${INSTALL}/bin/brew"
+	BREW="${INSTALL}/bin/brew"
+fi
+
+[ -x "$BREW" ] && exec "$BREW" "$@" || echo "Can not find a brew to brew with"

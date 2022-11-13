@@ -1,0 +1,149 @@
+#!/bin/sh
+
+#
+# Date		Ver	Who	What
+# 171129	001	GK	Support SWAP MSDOS partition before Windows partition to mount in both Windows and Linux
+#
+
+# Constants
+PARTEFISP='C12A7328-F81F-11D2-BA4B-00A0C93EC93B'		# EF00 in gdisk
+PARTMSDOS='EBD0A0A2-B9E5-4433-87C0-68B6B72699C7'
+PARTMACOS='48465300-0000-11AA-AA11-00306543ECAC'		# MacOS
+PARTMACRE='426F6F74-0000-11AA-AA11-00306543ECAC'		# Recovery MacOS
+PARTLIX64='4F68BCE3-E8CD-4DB1-96E7-FBCAF984B709'		# 8304 in
+PARTLINUX='0FC63DAF-8483-4772-8E79-3D69D8477DE4'		# 8300
+PARTWINDR='DE94BBA4-06D1-4D40-A16A-BFD50179D6AC'		# 2700 Windows Recovery
+
+# Paths
+vmd='/Users/Shared/Virtual'		# Location for VBox vmdk files
+
+# Globals
+bcWindows=''	# Example /dev/disk0s4
+hdWindows=''	# Example /dev/disk0
+pnWindows=''	# Example 4
+bcWindRec=''	# Example /dev/disk0s4
+hdWindRec=''	# Example /dev/disk0
+pnWindRec=''	# Example 4
+bcLinux=''
+hdLinux=''
+pnLinux=''
+bcSwap=''		# Swap if on same disk as Linux or Windows
+pnSwap=''
+bcESP=''
+pnESP=''
+
+# Make sure we have our paths
+mkdir -p "$vmd"
+vmp="${vmd}/BootCamp-$(hostname -s).vmdk"
+
+
+CreateVirtualBoxPartition()
+ {
+	local	os bcp bcd bcn partN
+
+	os="$1"
+	bcp="$2"
+	bcd="$3"
+	bcn="$4"
+	vmp="${vmd}/BootCamp-$(hostname -s)-${os}.vmdk"
+
+	echo "Found partition for $1: $bcp"
+
+	diskutil unmount "$bcp" 2>/dev/null
+
+	for partN in 1 $(echo "$bcn" | sed -e 's/,/ /g'); do
+		echo "Permitting writes to ${bcd}s${partN}"
+		if [ -e "${bcd}s${partN}" ]; then
+			sudo chmod a+rw "$bcp" "${bcd}s${partN}"
+		else
+			echo "*** Device entry not present"
+		fi
+	done
+	# sudo chmod a+rw "$hdWindows" # Not needed?
+
+	if [ ! -e "${vmp}" ]; then
+		echo ''
+		echo "Creating Bootcamp VB partition for $bcp on $bcd in $vmp including $bcn"
+		echo "Doing: sudo VBoxManage internalcommands createrawvmdk -rawdisk "${bcd}" -filename "${vmp}" -partitions "$bcn""
+		sudo VBoxManage internalcommands createrawvmdk -rawdisk "${bcd}" -filename "${vmp}" -partitions "$bcn"
+	fi
+
+	sudo chmod a+rw "${vmd}"/BootCamp-*.vmdk
+	ls -l "${vmd}"/BootCamp-*.vmdk
+
+	for i in BOOTCAMP SEVEN EIGHT ACHT SIEBEN ZEHN System\ Reserved SWAP; do
+		[ -e "/Volumes/$i" ] && diskutil unmount "/Volumes/$i"
+	done
+ }
+
+for i in /dev/disk?; do
+	echo "*** Checking device:  $(basename $i)"
+
+	if [ -z "$bcWindows" -a -z "$bcLinux" ]; then
+		# Grab the first Microsoft Partition - assume it is SWAP if it is not Windows OS
+		bcSwap=$(sudo gpt show "$i" 2>&1 | grep "$PARTMSDOS" | head -n 1)
+		[ -n "$bcSwap" ] && pnSwap=$(echo "$bcSwap" | awk '{print $3}')
+
+		# Grab the first EFI Partition
+		bcESP=$(sudo gpt show "$i" 2>&1 | grep "$PARTEFISP" | head -n 1)
+		[ -n "$bcESP" ] && pnESP=$(echo "$bcESP" | awk '{print $3}')
+	fi
+
+	if [ -z "$bcWindows" ]; then
+		echo "Checking: "$(basename "$i")" for Windows"
+
+		# Grab the last Microsoft Partition - assume it is the Windows partition
+		bcWindows=$(sudo gpt show "$i" 2>&1 | grep "$PARTMSDOS" | tail -n 1)
+
+		if [ -n "$bcWindows" ]; then
+			hdWindows="$i"
+			pnWindows=$(echo "$bcWindows" | awk '{print $3}')
+			bcWindows="${i}s${pnWindows}" && echo "Listing: [$bcWindows]" && ls -l "$bcWindows"
+		fi
+	fi
+
+	if [ -z "$bcWindRec" ]; then
+		echo "Checking: "$(basename "$i")" for Windows Recovery"
+
+		# Grab the last Windows Recovcery Partition - assume it is the right one
+		bcWindRec=$(sudo gpt show "$i" 2>&1 | grep "$PARTWINDR" | tail -n 1)
+
+		if [ -n "$bcWindRec" ]; then
+			hdWindRec="$i"
+			pnWindRec=$(echo "$bcWindRec" | awk '{print $3}')
+			bcWindRec="${i}s${pnWindRec}" && echo "Listing: [$bcWindRec]" && ls -l "$bcWindRec"
+		fi
+	fi
+
+	# Add nofail to fstab options in Linux for the bcWindows and bcSwap partitions
+	if [ -z "$bcLinux" ]; then
+		echo "Checking: "$(basename "$i")" for Linux"
+		bcLinRoot=$(sudo gpt show "$i" 2>&1 | grep "$PARTLIX64" | tail -n 1)		# x64 partition type 8304 for root partition in http://www.freedesktop.org/wiki/Specifications/DiscoverablePartitionsSpec/
+		bcLinux=$(sudo gpt show "$i" 2>&1 | grep "$PARTLINUX" | tail -n 1)		# Linux filesystem partition type 8300
+		bcLinDos=$(sudo gpt show "$i" 2>&1 | grep "$PARTMSDOS" | head -n 1)
+
+		# Fall through
+		[ -z "$bcLinux" ] && bcLinux="$bcLinRoot"
+		[ -z "$bcLinux" ] && bcLinux="$bcLinDos"
+
+		if [ -n "$bcLinux" ]; then
+			hdLinux="$i"
+			pnLinux=$(echo "$bcLinux" | awk '{print $3}')
+			bcLinux="${i}s${pnLinux}" && ls -l "$bcLinux"
+			[ "$bcLinux" = "$bcWindows" ] && bcLinux='' && echo '** NULLED, same as Windows **'
+		fi
+
+	fi
+done
+
+# Create the files
+[ -n "$pnSwap" ] && pnESP="$pnSwap,$pnESP" && diskutil unmount "$bcSwap" && sudo chmod 666 "$bcEFI"
+
+# Include Recovery partition with windows if we have one
+[ -n "$pnWindRec" ] && pnWindows="$pnWindows,$pnWindRec"
+
+# Create  Windows only, Linux only, Windows & Linux, Whole Disk
+[ -n "$bcWindows" ] && CreateVirtualBoxPartition "Windows" "$bcWindows" "$hdWindows" "$pnWindows,$pnESP"
+[ -n "$bcLinux" ] && CreateVirtualBoxPartition "Linux" "$bcLinux" "$hdLinux" "$pnLinux,$pnESP"
+[ -n "$bcLinux" -a -n "$bcWindows" ] && CreateVirtualBoxPartition 'WinLux' "$bcWindows" "$hdWindows" "$pnWindows,$pnLinux,$pnESP"
+[ -n "$bcLinux" -o -n "$bcWindows" ] && CreateVirtualBoxPartition 'Whole' "$bcWindows" "$hdWindows" '0'

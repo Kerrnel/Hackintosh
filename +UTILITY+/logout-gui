@@ -1,0 +1,24 @@
+#!/bin/sh
+GetLoggedInUsers()
+ {
+	local	username rest
+	ps aux | grep -v 'grep' | grep 'loginwindow' | while read username rest; do echo $username; done | sort -u
+ }
+
+[ $(id -u) -eq 0 ] && SUDO='' || SUDO='sudo'
+[ "$1" = '' ] && USERS=$(GetLoggedInUsers) || USERS="$@"
+
+if [ -z "$USERS" ]; then
+	echo "Usage $0 listOfUsers"
+else
+	for i in $USERS; do
+		echo "GUI Logout $i"
+		$SUDO launchctl bootout gui/$(id -u "$i")
+	done
+fi
+
+# Other methods
+# sudo pkill loginwindow
+# osascript -e 'tell app "System Events" to «event aevtrlgo»'
+# osascript -e 'tell application "loginwindow" to «event aevtrlgo»'
+# osascript -e 'tell app "System Events" to log out'

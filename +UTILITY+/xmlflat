@@ -1,0 +1,187 @@
+#!/bin/sh
+#
+#	Ver	Who	When	What
+#	003	GLK	210110	Tested with xmlparse to match original output. Passed in at least Igloo case
+#	002	GLK	201217	Update to work on Mac - no double arraws in awk, indeterminate "for v in array" order, fix stashing EOS
+#
+gVersion=0.02
+gStamped=201217
+
+DEBUG=0			# Noisy?
+
+Msg()
+ {
+	local t
+	[ "$1" = '-' ] && shift || ([ -n "$EPOCHSECONDS" ] && t="$EPOCHSECONDS" || t=$(date +%s); t="$((1000 + ($t % 3600))): ")
+	echo "$t$@" >&2
+ }
+
+InfoMsg()
+ {
+	[ $DEBUG -gt 0 ] && Msg "$@"
+ }
+
+DbgMsg()
+ {
+	[ $DEBUG -gt 1 ] && Msg "$@"
+ }
+
+Usage()
+ {
+	local	b=$(basename "$0")
+
+	Msg '-' "Usage: $b [-b] xmlfile
+
+	Flattens key/value pairs inside a <dict> section into single lines
+
+	-b	Ignore blank lines toggle (default ON)
+
+	or - cat file.xml | $b ...
+
+	Examples
+	xmlflat config.plist
+
+	Version $gVersion from $gStamped
+"
+ }
+
+
+
+DoXML()
+ {
+	awk -v "DEBUG=$DEBUG" '
+function PrintKeys()
+ {
+	Msg(0, "PrintKeys: " keyi " : " skip)
+	for (v = 0; v < keyi; v++)	# On Mac, for v in stashK does 2 0 1 (order is not determinated)
+	 {
+		m = length(stashK[v])
+		t = ""
+		while (m <= keym)
+		 {
+			t = t " "
+			++ m
+		 }
+		b = 1
+		while ((b <= length(stashV[v])) && (substr(stashV[v], b, 1) != "<"))
+			++ b;
+		print stashK[v] t substr(stashV[v], b)
+	 }
+	keyi = 0
+	keym = 0
+	delete stashK
+	delete stashV
+ }
+
+function Msg(lvl, m)
+ {
+	if (DEBUG > lvl)
+		print "= " m > "/dev/stderr"
+ }
+
+BEGIN {
+	indi = 0	# Depth into Array/Dict
+	keyi = 0	# Number of stashed keys
+	keym = 0	# Max length of stashed (keys)
+	skip = 0
+ }
+
+
+/<key>/ {
+	# Are we inside a <dict/array> and do we end with </key> on this line?
+	n = length($0)
+	if ((indi > 0) && (n > 8) && ((index($0, "</key>") + 7) > length($0)))
+	 {
+		if (n > keym)		# Monitor longest <key></key> line
+			keym = n
+		stashK[keyi] = $0
+		skip = 2
+		Msg(0, "Stash key: " keyi " : " skip " (" $0 ")")
+	 }
+ }
+
+/<dict>|<array>/ {
+	# Entering a block - make sure to flush current stash if any - we may have stashed k/v pairs and the k for this v
+	Msg(0, "Into: " keyi " : " skip " (" $0 ")")
+	if (skip)
+	 {
+		k = stashK[keyi]
+		if (keyi > 0)
+			PrintKeys()		# Flush stash
+		print k
+	 }
+	indi ++
+	skip = 0
+ }
+
+/<\/dict>|<\/array>/ {
+	-- indi
+	Msg(0, "End of section with " keyi " keys : " skip " (" $0 ")")
+ }
+
+// {
+	if (!skip)
+	 {
+		if (keyi)
+			PrintKeys()
+		print $0
+	 }
+	else if (1 == skip)
+	 {
+		Msg(0, "Stash val: " keyi " (" $0 ")")
+		stashV[keyi] = $0
+		++ keyi
+		-- skip
+	 }
+	else
+		-- skip
+}
+
+END {
+	if (keyi)
+		PrintKeys()
+}
+	'
+ }
+
+
+GetURL()
+ {
+	local	w f e
+
+	if [ "${1%%://*}" != "$1" ]; then
+		w=$(which 'wget' 2>/dev/null)
+		f='-O - -U "Mozilla/4.0"'
+		[ -z "$w" ] && w=$(which 'curl' 2>/dev/null) && f='-sA "Mozilla/4.0"'
+		if [ -z "$w" ]; then
+			echo "Need curl or wget to get URLs"
+			exit 1
+		fi
+		InfoMsg "Loading: $1 with $w $f"
+		$w $f "$1" 2>/dev/null
+		e=$?
+		DbgMsg "Loaded ($e): $1"
+	else
+		cat "$1"
+	fi
+ }
+
+while [ -n "$1" ]; do
+	case "$1" in
+	  '-b') IGNOREBLANK=$((1 - $IGNOREBLANK))	;;
+	  -*)	Msg "Unknown option: $1"			;;
+	  *)	URL="$URL
+$1"
+	esac
+	shift
+done
+
+if [ -n "$URL" ]; then
+	echo "$URL" | while read line; do if [ -n "$line" ]; then
+		GetURL "$line" | DoXML
+	fi; done
+elif [ -t 0 ]; then
+	Usage
+else
+	DoXML
+fi
