@@ -5,16 +5,21 @@
 ```
 ASRock H370-itx
 ASRock Z390-itx
+ASRock Z590-itx (coming soon)
 ASMini 300W
-Hystou 7500
-Hystou 8500
-NUC8 i7
+EGlobal S500 (i9-10885H)
+Hystou 7500U
+Hystou 8500U
+NUC8 i7 - 
+NUC8 i7 - 
 Gigabyte Brix i5
-Gigabyte Brix i7 - Runs 13.0
+Gigabyte Brix i7 - Runs 13.2
 ```
+
+These Eglobal / Hystou / Kingdel / Morefine / etc. computers seem to come from the same place. The S200 is the only one that has a BIOS so locked down I give up. (No CFG lock etc.).
 
 ```
 Refind for multibooting is included +UTILITY+ and some scripts
 ```
 
-Latest OS - Ventura 13.0
+Latest OS - Ventura 13.2
