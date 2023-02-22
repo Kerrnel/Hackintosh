@@ -1,0 +1,91 @@
+#!/bin/sh
+Msg()	{ echo "$(date +%s)	$@" >&2; }
+Err()	{ echo "++++++++	$@" >&2; }
+
+Usage()
+ {
+	Msg "	$0 [config.plist ...]
+
+	Check existance in kext folder relative to input file of kext(s) and output version(s).
+"
+ }
+
+CheckOne()
+ {
+	local	line p last k tag
+
+	p="$1"
+	p="${p%/*}"
+	[ "$p" = "$1" ] && p='' || p="${p}/"
+	p="${p}Kexts"
+
+	Msg '-----------------------------------------'
+	Msg '-		KEXT			-'
+
+	while read line; do if [ -n "$line" ]; then
+#		Msg "Checking: $p/$line in $i"
+
+#	:Kernel:Add/#:BundlePath/string=IntelMausi.kext
+#	:Kernel:Add/#:Comment/string=
+#	:Kernel:Add/#:Enabled=~true
+#	:Kernel:Add/#:ExecutablePath/string=Contents/MacOS/IntelMausi
+
+		tag="${line##*:}"
+		line="${tag#*=}"
+		tag="${tag%%[/=]*}"
+
+		case "$tag" in
+		  'BundlePath')
+			[ -n "$last" ] && Msg "$last" && last=''
+			k="$p/$line"
+			if [ -d "$k" ]; then
+				last=$(kext-version "$p/$line")
+			else
+				k=''
+				Err "Not found: $line"
+			fi
+		  ;;
+		 'Enabled')
+			[ "$line" = '~false' ] && last="--	$last" || last="++	$last"
+		  ;;
+		  'ExecutablePath')
+			if [ -n "$k" ]; then
+				[ -e "$k/$line" ] && last="${last} [$line]" || last="${last} [*** $line NOT FOUND ***]"
+			fi
+		  ;;
+		esac
+	fi; done
+	[ -n "$last" ] && Msg "$last" && last=''
+ }
+
+CheckAml()
+ {
+	local	line p
+
+	p="$1"
+	p="${p%/*}"
+	[ "$p" = "$1" ] && p='' || p="${p}/"
+	p="${p}ACPI"
+
+	Msg '-----------------------------------------'
+	Msg '-		ACPI			-'
+	
+	while read line; do
+		Msg $(ls -l "$p/$line")
+	done
+ }
+
+KextCheck() {	xmlp -a -s kext "$i" -n 3 | CheckOne "$i"; }
+AcpiCheck() {	xmlp -a -q -s aml "$i" | CheckAml "$i"; }
+
+for i in "$@"; do
+	if [ -r "$i" ]; then
+		KextCheck "$i"
+		AcpiCheck "$i"
+		Msg '-----------------------------------------'
+	else
+		Msg "Can't read $i"
+	fi
+done
+
+[ -z "$1" ] && Usage

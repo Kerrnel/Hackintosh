@@ -1,13 +1,19 @@
 #!/bin/sh
 #
+#	Todo
+#	001	Comment support inside of dict/array blocks
+#
+#	History
 #	Ver	Who	When	What
-#	003	GLK	210110	Tested with xmlparse to match original output. Passed in at least Igloo case
+#	004	GLK	230213	Broke on multi-line <key>name</key> or <tag>value</tag> = fixed with buildK buildV flags; TABSZ
+#	003	GLK	210110	Tested with xmlp to match original output. Passed in at least Igloo case
 #	002	GLK	201217	Update to work on Mac - no double arraws in awk, indeterminate "for v in array" order, fix stashing EOS
 #
-gVersion=0.02
-gStamped=201217
+gVersion=0.03
+gStamped=230213
 
 DEBUG=0			# Noisy?
+TABSZ=4			# Tab size (1, 4, 8 e.g.)
 
 Msg()
  {
@@ -15,16 +21,9 @@ Msg()
 	[ "$1" = '-' ] && shift || ([ -n "$EPOCHSECONDS" ] && t="$EPOCHSECONDS" || t=$(date +%s); t="$((1000 + ($t % 3600))): ")
 	echo "$t$@" >&2
  }
+InfoMsg()	{ [ $DEBUG -gt 0 ] && Msg "$@";	}
+DbgMsg()	{ [ $DEBUG -gt 1 ] && Msg "$@";	}
 
-InfoMsg()
- {
-	[ $DEBUG -gt 0 ] && Msg "$@"
- }
-
-DbgMsg()
- {
-	[ $DEBUG -gt 1 ] && Msg "$@"
- }
 
 Usage()
  {
@@ -46,31 +45,53 @@ Usage()
  }
 
 
-
 DoXML()
  {
-	awk -v "DEBUG=$DEBUG" '
+	awk -v "DEBUG=$DEBUG" -v "TAB=$TABSZ" '
+function ltrim(s) { sub(/^[ \t\r\n]+/, "", s); return s }
+function rtrim(s) { sub(/[ \t\r\n]+$/, "", s); return s }
+function trim(s) { return rtrim(ltrim(s)); }
+
 function PrintKeys()
  {
 	Msg(0, "PrintKeys: " keyi " : " skip)
+
+	# Line up on a tab column?
+	if (TAB > 1)
+		keym = ((keym / TAB) + 1) * TAB - 2
+
 	for (v = 0; v < keyi; v++)	# On Mac, for v in stashK does 2 0 1 (order is not determinated)
 	 {
 		m = length(stashK[v])
 		t = ""
+
+
 		while (m <= keym)
 		 {
-			t = t " "
-			++ m
+			if (TAB < 1)
+			 {
+				t = t " "
+				++ m
+			 }
+			else
+			 {
+				t = t "\t"
+				m /= TAB
+				++ m
+				m *= TAB
+			 }
 		 }
 		b = 1
 		while ((b <= length(stashV[v])) && (substr(stashV[v], b, 1) != "<"))
 			++ b;
 		print stashK[v] t substr(stashV[v], b)
 	 }
+	if (keyi) {
+		delete stashK
+		delete stashV
+	 }
 	keyi = 0
 	keym = 0
-	delete stashK
-	delete stashV
  }
 
 function Msg(lvl, m)
@@ -79,24 +100,48 @@ function Msg(lvl, m)
 		print "= " m > "/dev/stderr"
  }
 
-BEGIN {
-	indi = 0	# Depth into Array/Dict
-	keyi = 0	# Number of stashed keys
-	keym = 0	# Max length of stashed (keys)
-	skip = 0
+function Complete(v, b)
+ {
+	# If last two chars are /> or front <tag> matches end </tag> return true
+	b = index(v, "<")
+	Msg(3, "Complete: [" v "] [" substr(v, length(v) - 1, 2) "] [" substr(v, b + 1, index(v, ">") - b - 1) "]")
+	if (substr(v, length(v) - 1, 2) == "/>")
+		return 1
+	b = substr(v, b + 1, index(v, ">") - b - 1)
+	if (index(v, "</" b ">") > 0)
+		return 1
+	return 0
  }
 
+BEGIN {
+	indi = 0		# (Indent) Depth into Array/Dict
+	keyi = 0		# Number of stashed keys
+	keym = 0		# Max length of stashed (keys)
+	skip = 0		# Next line is a key?
+	buildV = 0		# Building a value item (<data>123</data>)
+	buildK = 0		# Building a key item?
+ }
 
 /<key>/ {
 	# Are we inside a <dict/array> and do we end with </key> on this line?
 	n = length($0)
-	if ((indi > 0) && (n > 8) && ((index($0, "</key>") + 7) > length($0)))
+	if ((indi > 0) && (n > 8))
 	 {
 		if (n > keym)		# Monitor longest <key></key> line
 			keym = n
 		stashK[keyi] = $0
-		skip = 2
-		Msg(0, "Stash key: " keyi " : " skip " (" $0 ")")
+
+		kp = index($0, "</key>")
+		if ((kp + 7) > length($0))
+		 {
+			skip = 2
+			Msg(0, "Stash key: " keyi " : " skip " (" $0 ")")
+		 }
+		else if (kp < 1)
+		 {
+			buildK = 1
+			Msg(0, "Build key: " keyi " : " skip " (" $0 ")")
+		 }
 	 }
  }
 
@@ -110,28 +155,63 @@ BEGIN {
 			PrintKeys()		# Flush stash
 		print k
 	 }
+	# Depth indent
 	indi ++
+	# Do not skip next
 	skip = 0
  }
 
 /<\/dict>|<\/array>/ {
+	# Depth out
 	-- indi
 	Msg(0, "End of section with " keyi " keys : " skip " (" $0 ")")
  }
 
 // {
-	if (!skip)
+	if (buildK)
 	 {
+		stashK[keyi] = stashK[keyi] " " trim($0)
+		if ((index(stashK[keyi], "</key>") + 7) > length(stashK[keyi]))
+		 {
+			skip = 2
+			buildK = 0
+			Msg(1, "Built key: " keyi " : " skip " (" stashK[keyi] ")")
+		 }
+	 }
+	else if (buildV)
+	 {
+		stashV[keyi] = stashV[keyi] " " trim($0)
+		if (Complete(stashV[keyi]))
+		 {
+			Msg(0, "Built val: " keyi " (" stashV[keyi] ") [" skip "]")
+			++ keyi
+			-- skip
+			buildV = 0
+		 }
+	 }
+	else if (!skip)
+	 {
+		Msg(0, "Not skip: " keyi)
 		if (keyi)
 			PrintKeys()
 		print $0
 	 }
 	else if (1 == skip)
 	 {
-		Msg(0, "Stash val: " keyi " (" $0 ")")
+		# If ends with /> or </word> where <word> is at beginning - then we have a value
 		stashV[keyi] = $0
-		++ keyi
-		-- skip
+		# Do not know that we ended this value - could be multiple lines like <string> \n SomeText \n </string>
+		if (Complete($0))
+		 {
+			Msg(0, "Stash val: " keyi " (" $0 ") [" skip "]")
+			++ keyi
+			-- skip
+		 }
+		else
+		 {
+			Msg(0, "Build val: " keyi " (" $0 ") [" skip "]")
+			buildV = 1
+		 }
 	 }
 	else
 		-- skip
@@ -166,14 +246,16 @@ GetURL()
 	fi
  }
 
-while [ -n "$1" ]; do
-	case "$1" in
-	  '-b') IGNOREBLANK=$((1 - $IGNOREBLANK))	;;
-	  -*)	Msg "Unknown option: $1"			;;
-	  *)	URL="$URL
-$1"
-	esac
-	shift
+while getopts 'bt:v' o; do case "$o" in
+  b)	IGNOREBLANK=$((1 - $IGNOREBLANK))	;;
+  t)	TABSZ=$((0 + $OPTARG))				;;
+  v)	DEBUG=$((1 + $DEBUG))				;;
+esac; done
+shift $(($OPTIND - 1))
+
+for u in "$@"; do
+	URL="$URL
+$u"
 done
 
 if [ -n "$URL" ]; then

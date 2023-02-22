@@ -1,0 +1,641 @@
+#!/bin/bash
+gVersion=0.10
+gStamped=230113
+#
+#	xmlp (c) 2020-23 Akua Corp
+#
+#	License: Public Domain
+#
+#	History
+#	010	GLK	230113	Document -a option, handle comments (multi-line values still a propblem)
+#	009	GLK	221224	Forget when I made last change, but root=feed coming out on top of search for jpgs in rss
+#	008	GLK	210207	Start to create new compact format with tabs instead of . and array/dict first item on next line
+#	007	GLK	201213	Support -e for current behaviour, compress paths with . matching parent component
+#	006	GLK	201124	Support array indexing on by default, -a to toggle
+#	005	GLK	201121	Support multiple inputs and file or URL as argument
+#	004	GLK	201120	Show Usage if no stdin and no args
+#	003	GLK	200823	Add -f flag to return after first match; add -k flag to flatten key/value couplets into /key/name/type:value lines
+#	002	GLK	200817	Add -n flag to get URL for JPG in RSS feeds from Reddit
+#	001	GLK	200711	Fix <br/> issue - I think fixed on another machine already
+
+# Compact format
+# Key=value
+# Key uncompressed
+#	/ -> child element
+#	~ -> child singlet (no further children, but perhaps properties)
+#	. -> property
+#	#x -> Array element #x
+#	% -> dict member
+# Key compressed first character
+#	/ Top level path
+#	: Top level <key>name</key> in a dict (:name)
+#	~ Top level singlet
+#	- backup a level
+# XML Format
+#	Key preceded by number of tabs as prior key paths
+
+# Globals setable by options
+DEBUG=0			# Noisy?
+RAWCONTENT=0	# Process html content tags as XML ... scale 0 to 2
+IGNORELAYOUT=1	# Ignore table/div/span constructs in html
+IGNOREBLANK=1	# Don't dump empty items
+IGNOREXML=0		# Handle HTML?
+ONLYFIRST=0		# Return after finding first match
+FLATKEY=1		# Turn dict <key>A</key><string>s</string> into path/A/string/s
+ARRAYNUMS=1		# Turn # for array items into #idx where idx increments each array item
+MATCH=''		# Only print matching path
+SUFFIX=''		# Only print if value has this suffix
+NEXTS=0			# Number of MATCH lines to print after SUFFIX is hit (e.g. to include following html line after jpg matches)
+NEXTC=0			# This is set to NEXTS when SUFFIX matches
+ONLYVALUE=0		# No tag path: prefix
+EXPAND=0		# Expanded full paths per line vs . per matching component
+OUTXML=0		# Output XML again (after edits presumably)
+MULTILINE=0		# Convert new line to ;; in values
+
+# Global current tag in process
+ROOTELEM=''	# ROOTELEM - first element after <?xml
+ENTITY=''	# TAG[ prop1=2][ prop3=4][/]
+CONTENT=''	# Text between TAG ...> and <
+TAG=''		# TAG of entity e.g. <TAG prop=1 prop2=3>
+PRIOR=''	# Prior tag (can change behavior - e.g. 'key' prior makes IGNOREBLANK ignored for next)
+PROP=''		# properties of TAG
+SINGLET=0	# Is the tag a singlet (ends with /> like img, link)
+LASTWP=''	# Last tag output (to compress path)
+LASTDEEP=0	# Last depth output (new compression)
+ARRAYIDX=0	# In nth number of array
+DEPTH=0		# How deep into the hierarchy are we?
+CDEEP=0		# How deep into the content hierarchy are we?
+CWP=''		# Current working path of parse (should start and end with #), SINGLETs don't effect, <tag> pushes, </tag> pops
+CCP=''		# Current content tag path
+SKIPLINE=0	# Skipping current line - don't print Fields
+
+Msg()
+ {
+	local t
+	[ "$1" = '-' ] && shift || ([ -n "$EPOCHSECONDS" ] && t="$EPOCHSECONDS" || t=$(date '+%s'); t="$((1000 + ($t % 3600))): ")
+	echo "$t$@" >&2
+ }
+
+InfoMsg()
+ {
+	[ $DEBUG -gt 0 ] && Msg "$@"
+ }
+
+DbgMsg()
+ {
+	[ $DEBUG -gt 1 ] && Msg "$@"
+ }
+
+ReadTag()
+ {
+	# Split words at >, split lines at < (example BODY a=b c="Some text">Test<NextTag> -> ENTITY = BODY ... text", CONTENT = Test, pos at NextTag>; TAG=BODY)
+	local IFS=\>
+
+	if read -d \< ENTITY CONTENT; then
+		CONTENT="${CONTENT#"${CONTENT%%[![:space:]]*}"}"	# Remove leading whitespace characters	
+		CONTENT="${CONTENT%"${CONTENT##*[![:space:]]}"}"	# Remove trailing whitespace characters
+		ENTITY="${ENTITY%"${ENTITY##*[![:space:]]}"}"		# Remove trailing whitespace characters
+		SINGLET=1
+		TAG="${ENTITY%/}"				# Single tag element? (ends with / or starts with !)
+		TAG="${TAG#!}"					# Comment also single tag element - only support comments that have no '>' in them (terminator)
+		[ "$TAG" = "$ENTITY" ] && SINGLET=0 || TAG="${TAG%"${TAG##*[![:space:]]}"}"		# Remove trailing whitespace characters
+		PROP="${TAG#*[[:space:]]}"		# Break out tag and properties
+		PROP="${PROP%[[:space:]]}"		# Dangling space in singlet
+		TAG="${TAG%%[[:space:]]*}"		# Space separator after TAG?
+		[ "$PROP" = "$TAG" ] && PROP=''
+		# TAG (Element Name) by spec are case sensitive, but attributes not
+		# [ $BASH_VERSINFO -gt 3 ] && TAG="${TAG,,*}" || TAG=$(echo "$TAG" | tr '[:upper:]' '[:lower:]')				# ... lower case all tags for match - fails on Darwin's bash 3.x - spec says case matters
+		DbgMsg "=======> Tag: $TAG ([$PROP][$CONTENT] $SINGLET)"
+		return 0
+	fi
+	return 1
+ }
+
+ReadXmlTag()
+ {
+	local	aIdx
+	local	pTag="${CWP##*/}"
+	local	pDic="${pTag#*:}"
+	local	del='/'
+
+	if ReadTag; then
+		if [ $SINGLET -eq 0 -a -n "$TAG" ]; then
+			# Convert dict & array to macro, join dict/key into :keyname construct
+			if [ $FLATKEY -ne 0 ]; then
+				case "$TAG" in
+				  'key')
+					if [ $BASH_VERSINFO -gt 3 ]; then
+						CONTENT="${CONTENT//\//_}"
+						CONTENT="${CONTENT//:/+}"
+					else
+						CONTENT=$(echo "$CONTENT" | tr '/:' '_+')
+					fi
+			  		if [ "$pTag" = 'dict'  ]; then	# First level of dictionary
+			  			CWP="${CWP%/*}"
+			  			TAG="$CONTENT/key"	# Dict name becomes Tag
+			  			CONTENT=''
+			  			del=':'
+			  		elif [ "$pDic" != "$pTag" ]; then
+			  			CWP="${CWP%:*}"
+			  			TAG="$CONTENT/key"
+			  			CONTENT=''
+			  			del=':'
+			  		else
+				  		TAG="$CONTENT/key"
+				  		CONTENT=''
+			  		fi
+				  ;;
+				  '/array')
+					pDic="${pTag%#*}"
+					[ "$pDic" != "$pTag" ] && CWP="${CWP%/#*}/array"
+				  ;;
+				  '/dict')
+					[ "$pDic" != "$pTag" ] && CWP="${CWP%:*}/dict"
+				  ;;
+				  *)
+					case "$pDic" in
+					  'array')
+						ARRAYIDX=1
+						if [ $ARRAYNUMS -eq 0 ]; then
+							aIdx=''
+							# PrintTag "${CWP}" '-'
+						else
+							aIdx="$ARRAYIDX"
+						fi
+						CWP="${CWP%/*}/#$aIdx"
+					  ;;
+					  '#'[0-9]*)
+						ARRAYIDX=$((1 + $ARRAYIDX))
+						if [ $ARRAYNUMS -eq 0 ]; then
+							aIdx=''
+							# PrintTag "${CWP}" '-'
+						else
+							aIdx="$ARRAYIDX"
+						fi
+						CWP="${CWP%/*}/#$aIdx"
+					  ;;
+					esac
+				 ;;
+				esac
+			fi
+
+			# Singlets are processed as a whole - so we are either going deep or popping up
+			if [ "${TAG#/}" = "$TAG" ]; then	# Going deeper
+				# Msg "-------------> Push $TAG onto ($CWP - $pDic - $PROP - $CONTENT)"
+				CWP="${CWP}${del}$TAG"
+				DEPTH=$((1 + $DEPTH))
+			else
+				[ "${TAG#/}" != "${CWP##*/}" ] && Msg "*** Tag mismatch at $CWP (${TAG#/} expected)"
+				# Msg "<------------ Pop $TAG from ($CWP - $CONTENT)"
+				DEPTH=$(($DEPTH - 1))
+				CWP="${CWP%/*}"
+				TAG=''							# Coming up
+			fi
+		fi
+		return 0
+	fi
+	return 1
+ }
+
+
+ReadHtmlTag()
+ {
+	if ReadTag; then
+		case "$TAG" in
+		  tr|td|table|div|span|br|p|/tr|/td|/table|/div|/span|/p)
+			[ $IGNORELAYOUT -ne 0 -a -z "$PROP" ] && TAG=''
+		  ;;
+		esac
+
+		if [ $SINGLET -eq 0 -a -n "$TAG" ]; then
+			if [ "${TAG#/}" = "$TAG" ]; then	# Going deeper
+				CCP="${CCP}/$TAG"
+				CDEEP=$((1 + $CDEEP))
+			else
+				[ "${TAG#/}" != "${CCP##*/}" ] && Msg "*** Tag mismatch at $CCP (${TAG#/} expected)"
+				CDEEP=$(($CDEEP - 1))
+				CCP="${CCP%/*}"
+				TAG=''							# Coming up
+			fi
+		fi
+		return 0
+	fi
+	return 1
+ }
+
+
+PrintLine()
+ {
+	# Print one line of output - check MATCH, ONLYVALUE, IGNOREBLANK parameters
+	local	m tag val
+
+	tag="$1"
+	val="$2"
+
+	DbgMsg "LINE: $tag [$val] [$MATCH] [$SUFFIX] $IGNOREBLANK [$PRIOR]"
+
+	# Skip line if not a match
+	[ -n "$MATCH" -a "${tag#$MATCH}" = "$tag" ] && SKIPLINE=1 && return 0
+	SKIPLINE=0
+	[ $SINGLET -ne 0 -a "$PRIOR" = 'key' ] && val="~$TAG"
+	[ -n "$val" -o $IGNOREBLANK -eq 0 -o "$PRIOR" = 'key' ] && PrintField "$tag" "$val"
+
+	return 0
+ }
+
+
+PrintProps()
+ {
+	local	i p v
+	local	tag="$1"
+	shift
+
+	DbgMsg "PROP: [$tag] [$@]"
+	[ $SINGLET -ne 0 ] && tag="${tag}~${TAG}" && DbgMsg "SINGLET: $tag [$TAG]"
+
+	for i in "$@"; do
+		# DbgMsg "PROP: ($i) ($TAG) ($@)"
+		p="${i%%=*}"	# Split property from value
+		v="${i#*=}"
+		v="${v#\"}"		# Chop off quoting
+		v="${v%\"}"
+		v="${v#\'}"
+		v="${v%\'}"
+		PrintLine "$tag.$p" "$v"
+	done
+ }
+
+
+MultiLine()
+ {
+	local	l line
+	local	lb=';;'
+	while read l; do
+		line="${line}${lb}$l"
+	done
+	echo "${line#$lb}"
+ }
+
+
+PrintTag()
+ {
+	# Print $1 tag's properties if any in $@
+	local	tag
+
+	tag="$1"
+	shift
+	[ -z "$tag" ] && tag="$CWP" && DbgMsg "CWTAG: $tag [$PROP]"
+
+	if [ $OUTXML -eq 0 ]; then
+		DbgMsg "TAG: [$tag] [$PROP] $IGNOREBLANK [$PRIOR]"
+		if [ "$TAG" = '--' ]; then
+			PROP=$(echo "$PROP" | MultiLine)
+			PrintLine "--" "$PROP"
+		else
+			[ $MULTILINE -ne 0 ] && PROP=$(echo "$PROP" | MultiLine)
+			PrintProps "$tag" $PROP		# Need to get props as "$@" - for i in $PROP fails to break words properly
+		fi
+		[ $MULTILINE -ne 0 ] && PROP=$(echo "$CONTENT" | MultiLine)
+		PrintLine "$tag" "$CONTENT"
+	else
+		# Untested and makes no sense
+		if [ $SINGLET -ne 0 ]; then
+			PrintLine "<$TAG/>" || [ -z "$PROP" ] && PrintLine "${CWP}:" "$TAG"
+		else
+			PrintLine "<$TAG $PROP>$CONTENT</$TAG>" || PrintLine "$tag" "$CONTENT"
+		fi
+	fi
+ }
+
+
+CompressTag()
+ {
+	# -  for each depth left (..)
+	# /  Reset root (absolute path)
+	# Else ... relative path
+
+	# 1: If prior = /a/b and current is /c/d ... output /c/d (first tag different)
+	# 2: If prior = /a/b/c/d and current is /a/b/e ... output -/-/e (2 left over in a = 2 * /-_
+	# 3: If prior = /a/b and current is /a/b/c/d ... output c/d (none left in a, something left in t)
+	# 4: If prior = /a/b.c and current is /a/b.d ... output -/b.d (treat b.c as a unit)
+	# 5: If prior = /a/b/c and current is /a/b/d ... output -/d (same as case 2)
+	# 6: If prior = /a/b and current is /a/b ... output .
+	# To reconstitute from CWP; - drops last path, / drops whole path, otherwise continue path
+	local	a n s r b d c
+	local	t="$1"
+	local	m=1			# Matched so far
+
+	a="${t#$LASTWP/}"	# Try lopping off LastWP
+	if [ "$a" != "$t" ]; then
+		t="$a"
+#	else
+	fi
+
+	OUT="$t"
+	LASTWP="$CWP"
+	return 0
+
+	a="${LASTWP#[:/]}";	LASTWP="$t"
+	d="${t:0:1}"
+	t="${t#[/:]}";		[ "$t" = "$LASTWP" ] && return 0	# No /
+	n=0
+
+	a="${a%[:/]*}"							# Drop last leaf - need to keep something even if the same
+	b="${t##*[:/]}"							# Keep leaf
+	b="${t:$((${#t} - ${#b} - 1)):1}$b"		# Delimiter included
+	t="${t%[:/]*}"
+
+	# Remove same path components up front
+	while [ -n "$a" -a -n "$t" -a $m -eq 1 ]; do
+		r="${a%%[:/]*}"
+		s="${t%%[:/]*}"
+		if [ "$r" = "$s" ]; then
+			n=$((1 + $n))
+			a="${a#*[:/]}"; [ "$r" = "$a" ] && a=''
+			d="${t:${#s}:1}"	# Delimiter now [:/]
+			t="${t#*[:/]}"; [ "$s" = "$t" ] && t=''
+		else
+			m=0
+		fi
+	done
+
+	# Restore tag
+	t="$d${t}"
+	t="${t%[:/]}${b}"	# Add back leaf
+
+#	Msg "###### $LASTWP - a:$a - t:$t - $n:$m"
+
+	r="$a"
+
+	if [ $n -lt 1 ]; then
+		n=''						# Case 1
+	else
+		if [ -n "$a" ]; then		# Need to backup
+			a="$a/"
+			n=''
+			while [ -n "$a" ]; do
+				n="-$n"
+				a="${a#*[:/]}"
+			done
+		elif [ -n "$t" ]; then
+			n='.'
+		else
+			n=''
+		fi
+	fi
+
+	DbgMsg "TAG: [$n][$t] [$LASTWP] [$CWP] [$r]"
+
+	OUT="$n$t"
+ }
+
+
+PrintField()
+ {
+	# Output "${1}White space separated items from $2"
+	local	f p l tag n
+	tag="$1"
+	f="$2"
+	l=''
+	f="${f%"${f##*[![:space:]]}"}"		# Remove trailing whitespace characters
+	while [ -n "$f" ]; do
+		f="${f#"${f%%[![:space:]]*}"}"	# Remove leading whitespace characters  
+		p="${f%%[[:space:]]*}"			# Get first "field"
+		l="$l $p"
+		[ "$p" = "$f" ] && f='' || f="${f#*[[:space:]]}"
+	done
+	l="${l# }"
+	DbgMsg "FIELD: $tag [$2] [$p] [$l] [$EXPAND]"
+
+	if [ $SKIPLINE -eq 0 ]; then
+		if [ -n "$SUFFIX" ]; then
+			f="${l%$SUFFIX}"
+			if [ "$f" = "$l" ]; then		# Suffix mismatch
+				[ $NEXTC -le 0 ] && return 0
+				NEXTC=$(($NEXTC - 1))
+			else
+				NEXTC="$NEXTS"				# Suffix match, this many matching tags after this one will be included
+			fi
+		fi
+
+		# Compress some tag path items - e.g. dict/key to :
+		if [ $OUTXML -eq 0 ]; then
+			if [ $EXPAND -eq 0 ]; then
+				CompressTag "$tag"
+				tag="$OUT"
+			fi
+			[ $ONLYVALUE -eq 0 ] && echo "${tag}=${l}" || echo "$l"
+		else
+			for ((l=$DEPTH; l>0; l--)); do printf "\t"; done
+			echo "<$tag>${l}</$tag>"
+		fi
+
+		[ $ONLYFIRST -eq 1 -a -n "$MATCH$SUFFIX" ] && exit 0 || ONLYFIRST=$(($ONLYFIRST - 1))
+	fi
+ }
+
+
+FlattenXml()
+ {
+	local	parms
+
+	CWP=''	# Start at root of whomever called me
+	DEPTH=0
+
+	while ReadXmlTag; do if [ -n "$TAG" ]; then case "$TAG" in
+	  !--)
+		InfoMsg "CMT: $PROP"
+		parms="${PROP%--}"
+		[ "$parms" != "$PROP" ] && PrintLine "$path/comment" "$parms"
+	  ;;
+
+	  content)
+		DbgMsg "CONTENT ($RAWCONTENT): $CONTENT"
+		DoContentTag "$TAG" "$CONTENT"
+		ReadXmlTag || return 0		# kill /content
+	  ;;
+
+	  *)
+		DbgMsg "READ: $TAG [$PROP] [$CONTENT] [$CWP] [$OUTXML]"
+		PrintTag
+		DbgMsg "RADE: $TAG [$PROP] [$CONTENT] [$CWP]"
+	  ;;
+	esac; PRIOR="${TAG##*/}"; fi; done
+ }
+
+
+FlattenHtml()
+ {
+	local	c
+	local	root="$CWP"
+
+	CCP=''
+	CDEEP=0
+
+	while ReadHtmlTag; do if [ -n "$TAG" ]; then case "$TAG" in
+	  !--)
+		InfoMsg "CMT: $PROP"
+		c="${PROP%--}"
+		[ "$c" != "$PROP" ] && PrintLine "${CWP}_" "$c"
+	  ;;
+
+	  *)
+#		Msg "HTML: $TAG - ${root} - W:${CWP} - C:${CCP}"
+		CWP="${root}${CCP}"
+		PrintTag
+	  ;;
+	esac; fi; done
+
+	CWP="$root"
+ }
+
+
+DoContentTag()
+ {
+	local	html
+
+	# Basic HTML encoded special character conversion ... and send it on down the processor
+	if [ $RAWCONTENT -lt 2 ]; then
+		if [ $BASH_VERSINFO -gt 3 ]; then
+			html="$2"
+			html="${html//&lt;/<}"
+			html="${html//&gt;/>}"
+			html="${html//&amp;/&}"
+			html="${html//&quot;/\"}"
+			html="${html//&#32;/ }"
+		else
+			html=$(echo "$2" | sed -e 's/&lt;/</g' -e 's/&gt;/>/g' -e 's/&quot;/"/g' -e 's/&amp;/\&/g' -e 's/&#32;/ /g')
+		fi
+		InfoMsg "HTML: $html"
+	fi
+
+	case $RAWCONTENT in
+	  0)	echo "$html" | FlattenHtml	;;	# Variables changed will be in the fork, not here (ideally we'd like LASTWP back) 
+	  1)	PrintLine "$1" "$html"		;;
+	  *)	PrintLine "$1" "$2"			;;
+	esac
+ }
+
+
+DoXML()
+ {
+	# Scan to start of an XML section (mostly the first line)
+	while [ "$TAG" != '?xml' ]; do
+		ReadTag || exit 0	# XML header
+	done
+	TAG="${TAG#?}"
+	PROP="${PROP%?}"
+	PrintTag 'xml'
+
+	# Next tag is DTD by XML definition; RSS Feeds don't have !doctype - they go right into feed
+	# Scan until root
+	while [ "$CWP" = '' ]; do
+		ReadXmlTag || exit 0
+		if [ "$TAG" = 'doctype' ]; then
+			PrintLine 'DOCTYPE' "$PROP"
+		else
+			DEPTH=0
+			[ -n "$CWP" ] && ROOTELEM="${CWP#/}" && PrintField 'root' "$ROOTELEM" && PrintTag 'root'
+		fi
+	done
+
+	# Now inside XML
+	InfoMsg "ENTER: XML $CWP"
+	FlattenXml	# Start at the top tag
+ }
+
+
+GetURL()
+ {
+	local	w f e
+
+	if [ "${1%%://*}" != "$1" ]; then
+		w=$(which 'wget' 2>/dev/null)
+		f='-O - -U "Mozilla/4.0"'
+		[ -z "$w" ] && w=$(which 'curl' 2>/dev/null) && f='-sA "Mozilla/4.0"'
+		if [ -z "$w" ]; then
+			echo "Need curl or wget to get URLs"
+			exit 1
+		fi
+		InfoMsg "Loading: $1 with $w $f"
+		$w $f "$1" 2>/dev/null
+		e=$?
+		DbgMsg "Loaded ($e): $1"
+	else
+		cat "$1"
+	fi
+ }
+
+
+Usage()
+ {
+	local	b=$(basename "$0")
+
+	Msg '-' "Usage: $b [-a][-b][-c][-d][-f][-h][-k][-l][-m path][-n #][-q][-s suffix][-t][-?] [URL or File or use stdin if nothing]
+
+	-a	Array item numbers blank (useful when searching for any array item)
+	-b	Ignore blank lines toggle (default ON)
+	-c	Increase rawness content fields (parsed as XML -> HTML -> raw)
+	-d	Increase verbosity
+	-e	Expand full paths (vs compressed . for each matching component to parent
+	-f	Stop parsing after nth match (see -m) per stream. Can specify multiple for multiple matches.
+	-h	Ignore search for ?xml tag to start (e.g. parse HTML)
+	-k	Toggle flatten key tag into path - key/val couplets as path/key/name/type:value
+	-l	Line break conversion to ;; for values
+	-m	Match - only output if /path matches given path (at head)
+	-n	Next n fields after match included (-s applies)
+	-q	Do not prefix each line with /path: - just value
+	-s	Suffix match - match backside (e.g. .jpg)
+	-t	Ignore content layout tags like tables, divs, spans
+	-x	Output XML ... work in progress
+
+	or - cat file.xml | $b ...
+
+	Examples
+	Version of kext: plutil -convert xml1 -o - AppleALC.kext/Contents/Info.plist | xmlparse -m :CFBundleShortVersionString -q -f
+	Reddit RSS images with URLs: xmlparse -n 1 -m '/entry/content/a.href' -s '.jpg' -q 'https://reddit.com/r/cityporn/rising/.rss'
+
+	Issues
+	Does not handle mult-line comments yet
+
+	Version $gVersion from $gStamped
+"
+ }
+
+
+URL=''
+
+while [ -n "$1" ]; do
+	case "$1" in
+	  '-a')	ARRAYNUMS=$((1 - $ARRAYNUMS))		;;	# Toggle showing array item numbers
+	  '-b') IGNOREBLANK=$((1 - $IGNOREBLANK))	;;
+	  '-c') RAWCONTENT=$((1 + $RAWCONTENT))		;;	# Rawness of HTML ouput (parsed, HTML, raw)
+	  '-d')	DEBUG=$((1 + $DEBUG))				;;
+	  '-e')	EXPAND=$((1 + $EXPAND))				;;	# Expand output from compressed -> paths -> XML (XML not yet done)
+	  '-f')	ONLYFIRST=$((1 + $ONLYFIRST))		;;	# Return after finding first MATCH (-m)
+	  '-h')	IGNOREXML=$((1 - $IGNOREXML))		;;	# Allow HTML?
+	  '-k')	FLATKEY=$((1 - $FLATKEY))			;;	# Toggle flatten keys in dicts
+	  '-l')	MULTILINE=$((1 - $MULTILINE))		;;	# Toggle flatten multilines with LF -> ;; conversion
+	  '-m')	MATCH="$2"; shift					;;
+	  '-n')	NEXTS="$2"; shift					;;	# Include n lines after SUFFIX is hit
+	  '-q') ONLYVALUE=$((1 - $ONLYVALUE))		;;	# No path prefix
+	  '-s')	SUFFIX="$2"; shift					;;	# Only print lines whose value ends with SUFFIX (e.g. .jpg)
+	  '-t') IGNORELAYOUT=$((1 - $IGNORELAYOUT))	;;	# Ignore content layout
+	  '-x')	OUTXML=$((1 + $OUTXML))				;;	# Output XML again
+	  '-?')	Usage; exit 0						;;
+	  -*)	Msg "Unknown option: $1"			;;
+	  *)	URL="$URL
+$1"
+	esac
+	shift
+done
+
+if [ -n "$URL" ]; then
+	echo "$URL" | while read line; do if [ -n "$line" ]; then
+		GetURL "$line" | DoXML
+	fi; done
+elif [ -t 0 ]; then
+	Usage
+else
+	[ $IGNOREXML -eq 0 ] && DoXML || FlattenXml
+fi
