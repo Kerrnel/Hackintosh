@@ -1,6 +1,8 @@
 #!/bin/sh
 
 #	History
+#	009	GLK	230108	Support bridge members in MEM
+#	008	GLK	221114	Recognize vmbrX for Proxmox
 #	007	GLK	221011	Fib: on FreeBSD
 #	006	GLK	220626	Docker or Linux bridging names interaces with 'br-' that can't be in variable names
 #	005	GLK	220223	Virtual IPs in VIP instead of WIP/LIP
@@ -31,6 +33,7 @@ IfProbe()
 			dMacA = ""
 			dType = ""
 			dMedi = ""
+			dMemb = ""
 			dActi = ""
 			dStat = ""
 			dFlag = ""
@@ -125,6 +128,7 @@ IfProbe()
 			if (dMacA != "") print "IF" dName "MAC=" dMacA
 			if (dType != "") print "IF" dName "TYPE=" dType
 			if (dMedi != "") print "IF" dName "MED=" dMedi
+			if (dMemb != "") print "IF" dName "MEM=" "\"" dMemb "\""
 			if (dActi != "") print "IF" dName "ACT=" dActi
 			if (dStat != "") print "IF" dName "UP=" dStat
 			if (dFlag != "") print "IF" dName "FLAG=" "\"" dFlag "\""
@@ -258,7 +262,7 @@ IfProbe()
 					dName = substr(dName, 0, atLoc - 1)
 				if ((gsub("\\.", "_", dName) > 0) || (index(dName, "docker") > 0) || (index(dName, "lxcbr") > 0) || (atLoc > 0))
 					dType = "virtual"
-				else if ((atLoc = index(dName, "-")) > 0)
+				else if (((atLoc = index(dName, "-")) > 0) || (1 == index(dName, "vmbr")))
 				 {
 					dType = "bridge"
 					if (atLoc > 0)
@@ -268,7 +272,7 @@ IfProbe()
 				if ($3 == "mtu")
 					dMTU = $4
 			   }
-			else if ($1 == "inet")
+			else if ("inet" == $1)
 			 {
 				dAddr = $2
 				dMask = $4
@@ -278,13 +282,15 @@ IfProbe()
 				if (a[2] != "") dMask=a[2]
 				if (dActi == "running") dActi = "active"
 			 }
-			else if ($1 == "inet6")
+			else if ("inet6" == $1)
 			 {
 				dAdd6 = $2
 				dPfx6 = $4
 				split(dAdd6, a, "/")
 				dAdd6=a[1]
 				if (a[2] != "") dPfx6=a[2]
+				split(dAdd6, a, "%")
+				dAdd6=a[1]
 				if (dActi == "running") dActi = "active"
 			 }
 			else if ($1 ~ /link\/.*/)
@@ -316,17 +322,19 @@ IfProbe()
 						dType = "wifi"
 				 }
 			 }
-			else if ($1 == "ether" || $1 == "address:")
+			else if ("ether" == $1 || "address:" == $1)
 				dMacA = $2
-			else if ($1 == "status:")
+			else if ("status:" == $1)
 				dActi = $2
-			else if ($1 == "Opened")
+			else if ("Opened" == $1)
 				dPID = $4
-			else if ($1 == "media:")
+			else if ("media:" == $1)
 			 {
 				dMedi = $2
 				if (dMedi == "Ethernet" || $0 ~ /.*-duplex.*/)	# Not on Darwin  || dMedi == "autoselect")
 					dType = "ether"
+				if (dMedi ~ /.*unknown.*/)
+					dMedi = "unknown"
 			 }
 			else if ($1 == "nd6" || $1 == "valid_lft" || $1 == "device" || $1 == "loop" || $1 == "TX" || $1 == "RX" || $1 ~ /^ec_capabilities=/ || $1 ~ /^enabled=/ || $1 ~ /^ec_enabled=/)
 				dLast = $1
@@ -346,8 +354,10 @@ IfProbe()
 				else if ("lo" == dGrp)
 					dType = "loop"
 			 }
+			else if ("member:" == $1)
+				dMemb= ("" == dMemb) ? $2 : dMemb " " $2
 			else
-				print "UNKNOWN_LINE=" "\"" $0 "\""
+				print "IF" dName "_UNKNOWN=" "\"" $0 "\""
 		 }
 
 		END {
@@ -358,7 +368,7 @@ IfProbe()
 			if (dWifi != "" && dExt == "")
 				dExt = dWifi
 
-			print "IFSUPV=1.0.7.2022.10.11"			# Version of me
+			print "IFSUPV=1.0.8.2022.11.14"			# Version of me
 			print "IFALL=\"" dAll "\""				# All Devices
 			print "IFAUTO=\"" dAut "\""				# Auto Config Devices
 			print "IFAIP=\"" dAip "\""				# Auto Config IPs
