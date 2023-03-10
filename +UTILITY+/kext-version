@@ -70,8 +70,8 @@ DoIt()
 						t=$(($t - 8))
 					done
 				fi
-				vs=$(PLDump "$f" | xmlp -m :CFBundleShortVersionString -q -f)
-				vl=$(PLDump "$f" | xmlp -m :CFBundleVersion -q -f)
+				vs=$(PLDump "$f" | xmlp -m %CFBundleShortVersionString -q -f)
+				vl=$(PLDump "$f" | xmlp -m %CFBundleVersion -q -f)
 				[ -z "$vs" ] && vs='NO'
 				[ -z "$vl" ] && vl='NO'
 				case $BRIEF in

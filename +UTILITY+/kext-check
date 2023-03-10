@@ -25,10 +25,10 @@ CheckOne()
 	while read line; do if [ -n "$line" ]; then
 #		Msg "Checking: $p/$line in $i"
 
-#	:Kernel:Add/#:BundlePath/string=IntelMausi.kext
-#	:Kernel:Add/#:Comment/string=
-#	:Kernel:Add/#:Enabled=~true
-#	:Kernel:Add/#:ExecutablePath/string=Contents/MacOS/IntelMausi
+#	%Kernel%Add/#%BundlePath/string=IntelMausi.kext
+#	%Kernel%Add/#%Comment/string=
+#	%Kernel%Add/#%Enabled=~true
+#	%Kernel%Add/#%ExecutablePath/string=Contents/MacOS/IntelMausi
 
 		tag="${line##*:}"
 		line="${tag#*=}"
@@ -75,7 +75,7 @@ CheckAml()
 	done
  }
 
-KextCheck() {	xmlp -a -s kext "$i" -n 3 | CheckOne "$i"; }
+KextCheck() {	xmlp -a -s kext "$i" -n 4 | CheckOne "$i"; }
 AcpiCheck() {	xmlp -a -q -s aml "$i" | CheckAml "$i"; }
 
 for i in "$@"; do
