@@ -23,7 +23,8 @@ gStamped=230311
 #	001	GLK	200711	Fix <br/> issue - I think fixed on another machine already
 
 #	Todo
-#	230310	Change ':' to something else as : is common in rss feed tags
+#	230311	DONE	Support CSV output
+#	230310	DONE	Change ':' to something else as : is common in rss feed tags
 
 # Compact format
 # Key=value
@@ -62,6 +63,7 @@ NEWLINE=';;'	# Convert \n to this if MULTILINE -ne 0
 READRAW=0		# Just dump tag reading
 AUTOIDX=0		# Detect array of repeating structures and apply index
 OUTKVO=0		# Output KVO form (executable by bash)
+OUTCSV=0		# Output CSV format (may be crazy)
 
 # Global current tag in process
 ROOTELEM=''		# ROOTELEM - first element after <?xml, only once per doc - we start parsing here
@@ -683,6 +685,113 @@ DoXML()
 	InfoMsg "LEAVE: XML $ROOTELEM"
  }
 
+FieldCSV()
+ {
+	local	v="$1"
+
+	if [ "$v" != "${v#*,}" -o "$v" != "${v#*${NEWLINE}}" -o "$v" != "${v#*\"}" ]; then
+		if [ $BASH_VERSINFO -gt 3 ]; then
+			v="${v//\"/\"\"}"
+			v="${v//,/v:^:v}"
+			v="${v//$NEWLINE/
+}"
+		else
+			v=$(echo "$v" | sed -e "s/\"/\"\"/g" -e "s/$NEWLINE/\n/g" -e 's/,/v:^:v/g')
+		fi		
+		v="\"${v}\""
+	fi
+
+	OUT="$v"
+ }
+
+FieldCSX()
+ {
+	# Restore commas inside fields
+	local	v="$1"
+	if [ "$v" != "${v#*v:^:v}" ]; then
+		if [ $BASH_VERSINFO -gt 3 ]; then
+			v="${v//v:^:v/,}"
+		else
+			v=$(echo "$v" | sed -e 's/v:^:v/,/g')
+		fi		
+	fi
+	OUT="$v"
+ }
+
+OutCSV()
+ {
+	local	line t first L cnt title s p n f P
+
+	first=''
+	cnt=0
+	title=''
+	L=''
+	P=0		# Processing?
+
+	while read line; do if [ $P -ne 0 ]; then
+		t="${line%%=*}"				# First field name
+		FieldCSV "${t##*${DDD}}"	# Base name
+		t="$OUT"
+		FieldCSV "${line#*=}"		# Value part
+		v="$OUT"
+
+		# Find field in title
+		s="$title"
+		p=0
+		n=0
+		while [ -n "$s" -a $p -eq 0 ]; do
+			n=$((1 + $n))
+			[ "${s%%,*}" = "$t" ] && p=$n
+			[ "${s#*,}" = "$s" ] && s='' || s="${s#*,}"
+		done
+
+		if [ $p -eq 0 ]; then
+			# New field
+			p=$n
+			[ $p -gt $cnt ] && cnt=$p
+			[ -z "$title" ] && title="$t" || title="${title},$t"
+			[ -z "$L" ] && L="$v" || L="${L},$v"
+		else
+			# Add field - if it collides, print line and start new
+			n=$p
+			s="$L"
+			L=''
+			while [ -n "$s" -a $n -gt 0 ]; do
+				f="${s%%,*}"
+				[ -z "$L" ] && L="$f" || L="${L},$f"
+				[ "${s#*,}" = "$s" ] && s='' || s="${s#*,}"
+				n=$(($n - 1))
+			done
+			if [ $n -gt 0 ]; then
+				# We have to create fields
+				while [ $n -gt 1 ]; do
+					L="${L},"
+					n=$(($n - 1))
+				done
+				L="${L},$v"
+			elif [ -z "$f" ]; then
+				# Empty field, replace it
+				L="${L},$v,$s"
+			else
+				# Collision, new row
+				[ -z "$first" ] && first="${title##,*}" && FieldCSX "$title" && echo "$OUT"
+				[ -n "$s" ] && L="${L},${s}"
+				FieldCSX "$L"
+				echo "$OUT"
+				L=''
+				while [ $n -gt 0 ]; do
+					L="${L},"
+					n=$(($n - 1))
+				done
+				[ -n "$L" ] && L="${L},$v" || L="$v"
+			fi
+		fi
+	else
+		[ "${line%%=*}" = 'root' ] && P=1
+		[ "${line#${SUD}}" != "$line" ] && P=2
+	fi; done
+	[ -n "$L" ] && FieldCSX "$L" && echo "$OUT"
+ }
 
 GetURL()
  {
@@ -711,15 +820,15 @@ GetURL()
 	fi
  }
 
-
 Usage()
  {
 	local	b=$(basename "$0")
 
-	Msg '-' "Usage: $b [-a][-b][-c][-d][-f][-h][-i][-k][-K c][-l][-m path][-n #][-q][-s suffix][-t][-?] [URL or pathToFile, will use stdin if available]
+	Msg '-' "Usage: $b [-a][-b][-C][-c][-d][-f][-h][-i][-k][-K c][-l][-m path][-n #][-Q c][-q][-s suffix][-t][-V][-x][-?] [URL or pathToFile, will use stdin if available]
 
 	-a	Array item numbers blank (useful when searching for any array item)
 	-b	Ignore blank lines toggle (default ON)
+	-C	Output CSV format
 	-c	Increase rawness content fields (parsed as XML -> HTML -> raw)
 	-d	Increase verbosity
 	-e	Expand full paths (vs compressed . for each matching component to parent
@@ -745,8 +854,9 @@ Usage()
 	Version of macOS thing: xmlp -m ${DKD}CFBundleShortVersionString -q -f /System/Applications/Mail.app/Contents/Info.plist
 	Reddit RSS images with URLs: xmlp -n 1 -m '${SUD}entry${SUD}content${SUD}a.href' -s '.jpg' -q 'https://reddit.com/r/cityporn/rising/.rss'
 	Use StdIn: cat /path/to/xmlfile.xml | xmlp
+	CVS Output: xmlp -C https://www.w3schools.com/xml/plant_catalog.xml
 
-	Issues: Does not handle mult-line comments yet, does not output comments
+	Issues: Wider range of XML file testing, more intelligent choices
 
 	Version $gVersion from $gStamped
 "
@@ -754,9 +864,10 @@ Usage()
 
 URL=''
 
-while getopts 'abcdefhiK:kL:lm:n:Q:qrs:tVx?' o; do case "$o" in
+while getopts 'abCcdefhiK:kL:lm:n:Q:qrs:tVx?' o; do case "$o" in
   'a')	ARRAYNUMS=$((1 - $ARRAYNUMS))		;;	# Toggle showing array item numbers
-  'b')	IGNOREBLANK=$((1 - $IGNOREBLANK))	;;
+  'b')	IGNOREBLANK=$((1 - $IGNOREBLANK))	;;	# Don't print lines with no value
+  'C')	OUTCSV=$((1 + $OUTCSV))				;;	# Output CSV format
   'c')	RAWCONTENT=$((1 + $RAWCONTENT))		;;	# Rawness of HTML ouput (parsed, HTML, raw)
   'd')	DEBUG=$((1 + $DEBUG))				;;
   'e')	EXPAND=$((1 + $EXPAND))				;;	# Expand output from compressed -> paths -> XML (XML not yet done)
@@ -799,12 +910,21 @@ if [ $OUTKVO -ne 0 ]; then
 	IXD='x'
 fi
 
+# If we get a URL - use it, else if no stdin - Usage - else process stdin
 if [ -n "$URL" ]; then
 	echo "$URL" | while read line; do if [ -n "$line" ]; then
-		GetURL "$line" | DoXML
+		if [ $OUTCSV -eq 0 ]; then
+			GetURL "$line" | DoXML
+		else
+			GetURL "$line" | DoXML | OutCSV
+		fi
 	fi; done
 elif [ -t 0 ]; then
 	Usage
 else
-	[ $IGNOREXML -eq 0 ] && DoXML || FlattenXml
+	if [ $OUTCSV -eq 0 ]; then
+		[ $IGNOREXML -eq 0 ] && DoXML || FlattenXml
+	else
+		[ $IGNOREXML -eq 0 ] && DoXML || FlattenXml | OutCSV
+	fi
 fi
