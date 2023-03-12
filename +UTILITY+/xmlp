@@ -697,7 +697,8 @@ OutCSV()
 	L=''
 	P=0		# Processing?
 
-	while read line; do if [ $P -ne 0 ]; then
+	while read line; do if [ $P -ne 0 -o "${line#${SUD}}" != "$line" ]; then
+		P=1							# Processing after first item
 		t="${line%%=*}"				# First field name
 		FieldCSV "${t##*${DDD}}"	# Base name
 		t="$OUT"
@@ -755,9 +756,6 @@ OutCSV()
 				[ -n "$L" ] && L="${L},$v" || L="$v"
 			fi
 		fi
-	else
-		[ "${line%%=*}" = 'root' ] && P=1
-		[ "${line#${SUD}}" != "$line" ] && P=2
 	fi; done
 	[ -n "$L" ] && FieldCSX "$L" && echo "$OUT"
  }
