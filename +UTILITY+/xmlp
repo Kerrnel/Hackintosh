@@ -1,12 +1,14 @@
 #!/bin/bash
-gVersion=0.14
-gStamped=230311
+gVersion=0.16
+gStamped=230313
 #
 #	xmlp (c) 2020-23 Greg Kerr, Akua Co.
 #
 #	License: Public Domain
 #
 #	History
+#	016	GLK	230313	Support wrapped tags in comments - e.g. <!-- <disabled>Something</disabled> -->
+#	015	GLK	230312	CompressTag on DKD starting paths based on DKD* instead of DDD* (Dict/Key items compress based on Dict, not path)
 #	014	GLK	230311	-V option for KVO format - bash executable key value output
 #	013	GLK	230310	AutoIndex option, feature
 #	012	GLK	230309	Better comments handling
@@ -23,6 +25,7 @@ gStamped=230311
 #	001	GLK	200711	Fix <br/> issue - I think fixed on another machine already
 
 #	Todo
+#	230312	DONE	Support > in comments
 #	230311	DONE	Support CSV output
 #	230310	DONE	Change ':' to something else as : is common in rss feed tags
 
@@ -140,15 +143,25 @@ ReadRaw()
 #		DbgMsg "C: $CONTENT"
 		CONTENT="${CONTENT#"${CONTENT%%[![:space:]]*}"}"	# Remove leading whitespace characters	
 		CONTENT="${CONTENT%"${CONTENT##*[![:space:]]}"}"	# Remove trailing whitespace characters
-		ENTITY="${ENTITY%"${ENTITY##*[![:space:]]}"}"		# Remove trailing whitespace characters
-		SINGLET=1
-		TAG="${ENTITY%/}"				# Single tag element? (ends with / or starts with !)
-		[ "$TAG" = "$ENTITY" ] && SINGLET=0 || TAG="${TAG%"${TAG##*[![:space:]]}"}"		# Remove trailing whitespace characters
-		CMT="${TAG#!--}"				# Comment also single tag element - only support comments that have no '>' in them (terminator)
-		if [ "$CMT" != "$TAG" ]; then
+		CMT="${ENTITY#!--}"				# Comment also single tag element - only support comments that have no '>' in them (terminator)
+		if [ "$CMT" != "$ENTITY" ]; then
+			# Get rest of comment up to -->
+			while [ "$CMT" = "${CMT%--}" ]; do
+				if read -r -d \< -t 33 TAG; then
+					TAG="${TAG%"${TAG##*[![:space:]]}"}"			# Remove trailing whitespace characters
+					[ "$TAG" != "${TAG%-->}" ] && TAG="${TAG%>}"	# At end of comment?
+					CMT="${CMT}<$TAG"
+				else
+					CMT="${CMT}--"
+				fi
+			done
 			PROP="${CMT%--}"
 			TAG='!--'
 		else
+			ENTITY="${ENTITY%"${ENTITY##*[![:space:]]}"}"		# Remove trailing whitespace characters
+			SINGLET=1
+			TAG="${ENTITY%/}"				# Single tag element? (ends with / or starts with !)
+			[ "$TAG" = "$ENTITY" ] && SINGLET=0 || TAG="${TAG%"${TAG##*[![:space:]]}"}"		# Remove trailing whitespace characters
 			PROP="${TAG#*[[:space:]]}"		# Break out tag and properties (\t \n \v \f \r " "), blank is space,tab
 			PROP="${PROP%[[:space:]]}"		# Dangling space in singlet
 			TAG="${TAG%%[[:space:]]*}"		# Space separator after TAG?
@@ -172,15 +185,25 @@ ReadTag()
 	if read -r -d \< -t 33 ENTITY CONTENT; then
 		CONTENT="${CONTENT#"${CONTENT%%[![:space:]]*}"}"	# Remove leading whitespace characters	
 		CONTENT="${CONTENT%"${CONTENT##*[![:space:]]}"}"	# Remove trailing whitespace characters
-		ENTITY="${ENTITY%"${ENTITY##*[![:space:]]}"}"		# Remove trailing whitespace characters
-		SINGLET=1
-		TAG="${ENTITY%/}"				# Single tag element? (ends with / or starts with !)
-		[ "$TAG" = "$ENTITY" ] && SINGLET=0 || TAG="${TAG%"${TAG##*[![:space:]]}"}"		# Remove trailing whitespace characters
-		CMT="${TAG#!--}"				# Comment also single tag element - only support comments that have no '>' in them (terminator)
-		if [ "$CMT" != "$TAG" ]; then
+		CMT="${ENTITY#!--}"				# Comment also single tag element - only support comments that have no '>' in them (terminator)
+		if [ "$CMT" != "$ENTITY" ]; then
+			# Get rest of comment up to -->
+			while [ "$CMT" = "${CMT%--}" ]; do
+				if read -r -d \< -t 33 TAG; then
+					TAG="${TAG%"${TAG##*[![:space:]]}"}"			# Remove trailing whitespace characters
+					[ "$TAG" != "${TAG%-->}" ] && TAG="${TAG%>}"	# At end of comment?
+					CMT="${CMT}<$TAG"
+				else
+					CMT="${CMT}--"
+				fi
+			done
 			PROP="${CMT%--}"
 			TAG='!--'
 		else
+			ENTITY="${ENTITY%"${ENTITY##*[![:space:]]}"}"		# Remove trailing whitespace characters
+			SINGLET=1
+			TAG="${ENTITY%/}"				# Single tag element? (ends with / or starts with !)
+			[ "$TAG" = "$ENTITY" ] && SINGLET=0 || TAG="${TAG%"${TAG##*[![:space:]]}"}"		# Remove trailing whitespace characters
 			PROP="${TAG#*[[:space:]]}"		# Break out tag and properties (\t \n \v \f \r " "), blank is space,tab
 			PROP="${PROP%[[:space:]]}"		# Dangling space in singlet
 			TAG="${TAG%%[[:space:]]*}"		# Space separator after TAG?
@@ -230,7 +253,7 @@ ReadXmlTag()
 			  '/array')
 				pDic="${pTag%#*}"
 				# Revert array number in path to array
-				[ "$pDic" != "$pTag" ] && CWP="${CWP%/#*}${SUD}array"
+				[ "$pDic" != "$pTag" ] && CWP="${CWP%${SUD}#*}${SUD}array"
 			  ;;
 			  '/dict')
 				# Revert path from $DKD to being a dict
@@ -257,7 +280,7 @@ ReadXmlTag()
 					else
 						aIdx="$ARRAYIDX"
 					fi
-					CWP="${CWP%/*}/#$aIdx"
+					CWP="${CWP%${SUD}*}${SUD}#$aIdx"
 				  ;;
 				esac
 			 ;;
@@ -405,82 +428,28 @@ PrintTag()
 
 CompressTag()
  {
-	# -  for each depth left (..)
-	# /  Reset root (absolute path)
-	# Else ... relative path
-
-	# 1: If prior = /a/b and current is /c/d ... output /c/d (first tag different)
-	# 2: If prior = /a/b/c/d and current is /a/b/e ... output -/-/e (2 left over in a = 2 * /-_
-	# 3: If prior = /a/b and current is /a/b/c/d ... output c/d (none left in a, something left in t)
-	# 4: If prior = /a/b.c and current is /a/b.d ... output -/b.d (treat b.c as a unit)
-	# 5: If prior = /a/b/c and current is /a/b/d ... output -/d (same as case 2)
-	# 6: If prior = /a/b and current is /a/b ... output .
-	# To reconstitute from CWP; - drops last path, / drops whole path, otherwise continue path
-	local	a n s r b d c
+	# Compress tag path with prior output path if applicable
+	# Rules
+	#	If array, drop left of array item path (${SUD}# delimiter)
+	#	If key/dict, drop left of key/dict
+	#	Else drop left of any of 4 path delimiters ($DDD) - array, keydict, item, singlet
+	local	a
 	local	t="$1"
 	local	m=1			# Matched so far
 
-#	Msg "*** COMP: [$LASTWP][$t][$CWP]"
+	DbgMsg "*** COMP: [$LASTWP][$t][$CWP]"
 
 	a="${t#$LASTWP}"	# Try lopping off LastWP
-	LASTWP="${t%$DDD*}"
+	if [ "${t#*${SUD}#}" != "$t" ]; then
+		LASTWP="${t%${SUD}#*}"
+	elif [ "${t#*%}" != "$t" ]; then
+		LASTWP="${t%${DKD}*}"
+	else
+		LASTWP="${t%${DDD}*}"
+	fi
 	[ "$a" != "$t" ] && t="${DAD}$a"
 	OUT="$t"
 	return 0
-
-	# Old more complicated
-	a="${LASTWP#[${DKD}/]}";	LASTWP="$t"
-	d="${t:0:1}"
-	t="${t#[/:]}";		[ "$t" = "$LASTWP" ] && return 0	# No /
-	n=0
-
-	a="${a%[:/]*}"							# Drop last leaf - need to keep something even if the same
-	b="${t##*[:/]}"							# Keep leaf
-	b="${t:$((${#t} - ${#b} - 1)):1}$b"		# Delimiter included
-	t="${t%[:/]*}"
-
-	# Remove same path components up front
-	while [ -n "$a" -a -n "$t" -a $m -eq 1 ]; do
-		r="${a%%[:/]*}"
-		s="${t%%[:/]*}"
-		if [ "$r" = "$s" ]; then
-			n=$((1 + $n))
-			a="${a#*[:/]}"; [ "$r" = "$a" ] && a=''
-			d="${t:${#s}:1}"	# Delimiter now [:/]
-			t="${t#*[:/]}"; [ "$s" = "$t" ] && t=''
-		else
-			m=0
-		fi
-	done
-
-	# Restore tag
-	t="$d${t}"
-	t="${t%[:/]}${b}"	# Add back leaf
-
-#	Msg "###### $LASTWP - a:$a - t:$t - $n:$m"
-
-	r="$a"
-
-	if [ $n -lt 1 ]; then
-		n=''						# Case 1
-	else
-		if [ -n "$a" ]; then		# Need to backup
-			a="$a/"
-			n=''
-			while [ -n "$a" ]; do
-				n="-$n"
-				a="${a#*[:/]}"
-			done
-		elif [ -n "$t" ]; then
-			n='.'
-		else
-			n=''
-		fi
-	fi
-
-	DbgMsg "CTAG: [$n][$t] [$LASTWP] [$CWP] [$r]"
-
-	OUT="$n$t"
  }
 
 
@@ -831,7 +800,7 @@ Usage()
 	-C	Output CSV format
 	-c	Increase rawness content fields (parsed as XML -> HTML -> raw)
 	-d	Increase verbosity
-	-e	Expand full paths (vs compressed . for each matching component to parent
+	-e	Expand full paths (vs compressed . for each matching component to parent)
 	-f	Stop parsing after nth match (see -m) per stream. Can specify multiple for multiple matches.
 	-h	Ignore search for ?xml tag to start (e.g. parse HTML)
 	-i	Disable auto indexer (array detector)
