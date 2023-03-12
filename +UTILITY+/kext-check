@@ -1,4 +1,8 @@
 #!/bin/sh
+
+#	History
+#	GLK	001	230312	Better AML checking with enabled output
+
 Msg()	{ echo "$(date +%s)	$@" >&2; }
 Err()	{ echo "++++++++	$@" >&2; }
 
@@ -10,7 +14,7 @@ Usage()
 "
  }
 
-CheckOne()
+CheckKext()
  {
 	local	line p last k tag
 
@@ -25,12 +29,14 @@ CheckOne()
 	while read line; do if [ -n "$line" ]; then
 #		Msg "Checking: $p/$line in $i"
 
-#	%Kernel%Add/#%BundlePath/string=IntelMausi.kext
-#	%Kernel%Add/#%Comment/string=
-#	%Kernel%Add/#%Enabled=~true
-#	%Kernel%Add/#%ExecutablePath/string=Contents/MacOS/IntelMausi
+#	%DeviceProperties%Kernel%Add/#%BundlePath/string=Lilu.kext
+# ...
+#	./#%BundlePath/string=IntelMausi.kext
+#	./#%Comment/string=
+#	./#%Enabled=~true
+#	./#%ExecutablePath/string=Contents/MacOS/IntelMausi
 
-		tag="${line##*:}"
+		tag="${line##*%}"
 		line="${tag#*=}"
 		tag="${tag%%[/=]*}"
 
@@ -46,7 +52,7 @@ CheckOne()
 			fi
 		  ;;
 		 'Enabled')
-			[ "$line" = '~false' ] && last="--	$last" || last="++	$last"
+			[ "$line" = '~false' ] && last="- 	$last" || last="++	$last"
 		  ;;
 		  'ExecutablePath')
 			if [ -n "$k" ]; then
@@ -58,9 +64,39 @@ CheckOne()
 	[ -n "$last" ] && Msg "$last" && last=''
  }
 
+ListMedium()
+ {
+	# drwxr-xr-x  58 akua akua 1856 Feb  5 11:47 3rd
+	local p n u g s m d t name
+	while read p n u g s m d t name; do
+		if [ -z "$name" ]; then
+			echo '* NOT FOUND *'
+		else
+			echo "${name##*/} ($s, $m $d $t)"
+		fi
+	done
+ }
+
+AmlCheck()
+ {
+	local	e o t n
+	o=$(ls -l "$3" 2>/dev/null | ListMedium)
+	n=$((40 - ${#o}))
+	while [ $n -gt 0 ]; do
+		t="$t	"
+		n=$(($n - 8))
+	done
+	[ "$2" = "${2%false}" ] && e='++' || e='- '
+	Msg "$e	$o	$t$1"
+ }
+
 CheckAml()
  {
-	local	line p
+	# %ACPI%Add/#1%Comment/string=Disables CNVW Device waking up PC
+	# %ACPI%Add/#1%Enabled=~false
+	# %ACPI%Add/#1%Path/string=SSDT-Disable-CNVW.aml
+
+	local	line p idx last aC aE aP t
 
 	p="$1"
 	p="${p%/*}"
@@ -68,15 +104,30 @@ CheckAml()
 	p="${p}ACPI"
 
 	Msg '-----------------------------------------'
-	Msg '-		ACPI			-'
-	
+	Msg "-		ACPI in $p		-"
+
+	last=1
 	while read line; do
-		Msg $(ls -l "$p/$line")
+		idx="${line#*#}";	idx="${idx%%%*}"				# Array index
+		t="${line%%=*}";	t="${t##*%}"; t="${t%%/*}"		# Tag
+		v="${line#*=}"										# Value
+
+		[ "$idx" != "$last" ] && last=$idx && AmlCheck "$aC" "$aE" "$p/$aP"
+
+		case "$t" in
+		  'Comment')	aC="$v"	;;
+		  'Enabled')	aE="$v"	;;
+		  'Path')		aP="$v"	;;
+		  *)			Msg "Syntax error in: $line"	;;
+		esac
+#		Msg $(ls -l "$p/$line")
 	done
+
+	AmlCheck "$aC" "$aE" "$p/$aP"
  }
 
-KextCheck() {	xmlp -a -s kext "$i" -n 4 | CheckOne "$i"; }
-AcpiCheck() {	xmlp -a -q -s aml "$i" | CheckAml "$i"; }
+KextCheck() {	xmlp -a -s kext -n 4 "$1" | CheckKext "$1"; }
+AcpiCheck() {	xmlp -e -m '%ACPI%Add' "$1" | CheckAml "$1"; }
 
 for i in "$@"; do
 	if [ -r "$i" ]; then
