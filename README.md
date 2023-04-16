@@ -8,6 +8,7 @@ ASRock Z390-itx + RX 580 XT
 ASRock H570-itx + RX 6900 XT
 ASRock Deskmini 310W
 EGlobal S500 (i9-10885H)
+EGlobal S500 (i9-9980H) - same
 Hystou 7500U
 Hystou 8500U
 NUC8 i7 - 
