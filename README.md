@@ -13,7 +13,7 @@ Hystou 8500U
 NUC8 i7 - 
 NUC8 i7 - 
 Gigabyte Brix i5
-Gigabyte Brix i7 - Runs 13.2
+Gigabyte Brix i7 - Runs 13+
 ```
 
 These Eglobal / Hystou / Kingdel / Morefine / etc. computers seem to come from the same place. The S200 is the only one that has a BIOS so locked down I give up. (No CFG lock etc.).
