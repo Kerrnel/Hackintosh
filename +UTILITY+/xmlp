@@ -1,12 +1,15 @@
 #!/bin/bash
-gVersion=0.16
-gStamped=230313
+gVersion=0.19
+gStamped=230412
 #
 #	xmlp (c) 2020-23 Greg Kerr, Akua Co.
 #
 #	License: Public Domain
 #
 #	History
+#	019	GLK	230412	YAML output start
+#	018	GLK	230327	EQC for = symbol
+#	017	GLK	230320	Some bug in comments with -> in them causes text until over-next --> to be included in comment, fix Usage
 #	016	GLK	230313	Support wrapped tags in comments - e.g. <!-- <disabled>Something</disabled> -->
 #	015	GLK	230312	CompressTag on DKD starting paths based on DKD* instead of DDD* (Dict/Key items compress based on Dict, not path)
 #	014	GLK	230311	-V option for KVO format - bash executable key value output
@@ -61,6 +64,7 @@ NEXTC=0			# This is set to NEXTS when SUFFIX matches
 ONLYVALUE=0		# No tag path: prefix
 EXPAND=0		# Expanded full paths per line vs . per matching component
 OUTXML=0		# Output XML again (after edits presumably)
+OUTYML=0		# Output streaming YAML
 MULTILINE=0		# Convert new line to $NEWLINE in values (happens for all comments)
 NEWLINE=';;'	# Convert \n to this if MULTILINE -ne 0
 READRAW=0		# Just dump tag reading
@@ -100,6 +104,7 @@ PRD='.'			# Property delimiter
 DDD="[$SUD$DKD$SND$PRD]"	# For path compression Path delimiters (LASTWP)
 IXD='^'			# Index delimiter - within a tag
 DAD='.'			# Path compression, use prior path - last [DDD] component + rest after DAD
+EQC='='			# Key=Value separator
 
 Msg()
  {
@@ -141,13 +146,15 @@ ReadRaw()
 	if read -r -d \< -t 33 ENTITY CONTENT; then
 #		DbgMsg "E: $ENTITY"
 #		DbgMsg "C: $CONTENT"
-		CONTENT="${CONTENT#"${CONTENT%%[![:space:]]*}"}"	# Remove leading whitespace characters	
-		CONTENT="${CONTENT%"${CONTENT##*[![:space:]]}"}"	# Remove trailing whitespace characters
 		CMT="${ENTITY#!--}"				# Comment also single tag element - only support comments that have no '>' in them (terminator)
+		CONTENT="${CONTENT%"${CONTENT##*[![:space:]]}"}"	# Remove trailing whitespace characters
 		if [ "$CMT" != "$ENTITY" ]; then
+			[ -n "$CONTENT" ] && CMT="${ENTITY}>${CONTENT%>}"
 			# Get rest of comment up to -->
 			while [ "$CMT" = "${CMT%--}" ]; do
+				DbgMsg "C: $CMT"
 				if read -r -d \< -t 33 TAG; then
+					DbgMsg "D: $TAG"
 					TAG="${TAG%"${TAG##*[![:space:]]}"}"			# Remove trailing whitespace characters
 					[ "$TAG" != "${TAG%-->}" ] && TAG="${TAG%>}"	# At end of comment?
 					CMT="${CMT}<$TAG"
@@ -158,6 +165,7 @@ ReadRaw()
 			PROP="${CMT%--}"
 			TAG='!--'
 		else
+			CONTENT="${CONTENT#"${CONTENT%%[![:space:]]*}"}"	# Remove leading whitespace characters	
 			ENTITY="${ENTITY%"${ENTITY##*[![:space:]]}"}"		# Remove trailing whitespace characters
 			SINGLET=1
 			TAG="${ENTITY%/}"				# Single tag element? (ends with / or starts with !)
@@ -183,10 +191,10 @@ ReadTag()
 
 	# -d delimiter, -r backslash not a shell char, -t timeout in seconds
 	if read -r -d \< -t 33 ENTITY CONTENT; then
-		CONTENT="${CONTENT#"${CONTENT%%[![:space:]]*}"}"	# Remove leading whitespace characters	
-		CONTENT="${CONTENT%"${CONTENT##*[![:space:]]}"}"	# Remove trailing whitespace characters
 		CMT="${ENTITY#!--}"				# Comment also single tag element - only support comments that have no '>' in them (terminator)
+		CONTENT="${CONTENT%"${CONTENT##*[![:space:]]}"}"	# Remove trailing whitespace characters
 		if [ "$CMT" != "$ENTITY" ]; then
+			[ -n "$CONTENT" ] && CMT="${ENTITY}>${CONTENT%>}"
 			# Get rest of comment up to -->
 			while [ "$CMT" = "${CMT%--}" ]; do
 				if read -r -d \< -t 33 TAG; then
@@ -200,6 +208,7 @@ ReadTag()
 			PROP="${CMT%--}"
 			TAG='!--'
 		else
+			CONTENT="${CONTENT#"${CONTENT%%[![:space:]]*}"}"	# Remove leading whitespace characters	
 			ENTITY="${ENTITY%"${ENTITY##*[![:space:]]}"}"		# Remove trailing whitespace characters
 			SINGLET=1
 			TAG="${ENTITY%/}"				# Single tag element? (ends with / or starts with !)
@@ -403,7 +412,19 @@ PrintTag()
 	shift
 	[ -z "$tag" ] && tag="$CWP" && DbgMsg "TCWP: $tag [$PROP]"
 
-	if [ $OUTXML -eq 0 ]; then
+	if [ $OUTYML -ne 0 ]; then
+		DbgMsg "PTAG: [$tag] [$PROP] $IGNOREBLANK [$PRIOR]"
+		if [ "$TAG" = '!--' ]; then
+			PROP=$(echo "$PROP" | MultiLine)
+			PrintLine '#' "$PROP"
+			CMTN=$((1 + $CMTN))
+		else
+			[ $MULTILINE -ne 0 ] && PROP=$(echo "$PROP" | MultiLine)
+			eval PrintProps \"$tag\" $PROP		# Need to get props as "$@" - for i in $PROP fails to break words properly (without eval, HTML parse failed on two word alt img tag)
+			[ $MULTILINE -ne 0 ] && CONTENT=$(echo "$CONTENT" | MultiLine)
+			PrintLine "$tag" "$CONTENT"
+		fi
+	elif [ $OUTXML -eq 0 ]; then
 		DbgMsg "PTAG: [$tag] [$PROP] $IGNOREBLANK [$PRIOR]"
 		if [ "$TAG" = '!--' ]; then
 			PROP=$(echo "$PROP" | MultiLine)
@@ -502,7 +523,7 @@ PrintField()
 					l=$(echo "$l" | sed -e "s/$QUOTE/$QUOTE\\\\$QUOTE$QUOTE/g")
 				fi
 			fi
-			[ $ONLYVALUE -eq 0 ] && echo "${tag}=${QUOTE}${l}${QUOTE}" || echo "${QUOTE}$l${QUOTE}"
+			[ $ONLYVALUE -eq 0 ] && echo "${tag}${EQC}${QUOTE}${l}${QUOTE}" || echo "${QUOTE}$l${QUOTE}"
 		else
 			for ((l=$DEPTH; l>0; l--)); do printf "\t"; done
 			echo "<$tag>${l}</$tag>"
@@ -778,12 +799,14 @@ GetURL()
 		$w $f "$1" 2>/dev/null
 		e=$?
 		DbgMsg "Loaded ($e): $1"
-	else
+	elif [ -f "$1" ]; then
 		if which 'plutil' > /dev/null 2>&1; then
 			grep -q '?xml' "$1" && cat "$1" || plutil -convert 'xml1' -o - "$1"
 		else
 			cat "$1"
 		fi
+	else
+		echo "$1 not found"
 	fi
  }
 
@@ -791,7 +814,7 @@ Usage()
  {
 	local	b=$(basename "$0")
 
-	Msg '-' "Usage: $b [-a][-b][-C][-c][-d][-f][-h][-i][-k][-K c][-l][-m path][-n #][-Q c][-q][-s suffix][-t][-V][-x][-?] [URL or pathToFile, will use stdin if available]
+	Msg '-' "Usage: $b [-a][-b][-C][-c][-d][-e][-E c][-f][-h][-i][-k][-K c][-l][-m path][-n #][-Q c][-q][-s suffix][-t][-V][-x][-?] [URL or pathToFile, will use stdin if available]
 
 	-a	Array item numbers blank (useful when searching for any array item)
 	-b	Ignore blank lines toggle (default ON)
@@ -799,20 +822,22 @@ Usage()
 	-c	Increase rawness content fields (parsed as XML -> HTML -> raw)
 	-d	Increase verbosity
 	-e	Expand full paths (vs compressed . for each matching component to parent)
-	-f	Stop parsing after nth match (see -m) per stream. Can specify multiple for multiple matches.
+	-E c	Change key-value separator (default $EQC)
+	-f	Stop parsing after first match (see -m) per stream. Can specify multiple for multiple matches.
 	-h	Ignore search for ?xml tag to start (e.g. parse HTML)
 	-i	Disable auto indexer (array detector)
-	-k	Toggle flatten key tag into path - key/val couplets as path/key/name/type:value
+	-k	Dict/key compression toggle (default !$EXPAND) - flatten dict/key into cwp${DKD}keyname/type${EQC}value
 	-K	Set dict/key compression character (default $DKD)
 	-l	Line break conversion to ;; for values (happens for comments by default)
-	-L	Change ;; to this for newline replacement
+	-L crc	Change ;; to this for newline replacement
 	-m pth	Match - only output if /path matches given path (at head)
 	-n cnt	Next n fields after match included (-s applies)
-	-q	Do not prefix each line with /path: - just value
+	-q	Do not prefix each line with /path${EQC}
 	-Q c	Quote character before and after values
+	-r	Raw mode - just to test tag parsing code
 	-s sfx  Suffix match - match backside (e.g. .jpg)
 	-t	Ignore content layout tags like tables, divs, spans
-	-V	Outpot in bash executable KV format (a=b where a legal variable name and b quoted value)
+	-V	Output in bash executable KV format (a=b where a is a legal variable name and b a quoted value)
 	-x	Output XML ... work in progress
 
 	or - cat file.xml | $b ...
@@ -821,7 +846,7 @@ Usage()
 	Version of macOS thing: xmlp -m ${DKD}CFBundleShortVersionString -q -f /System/Applications/Mail.app/Contents/Info.plist
 	Reddit RSS images with URLs: xmlp -n 1 -m '${SUD}entry${SUD}content${SUD}a.href' -s '.jpg' -q 'https://reddit.com/r/cityporn/rising/.rss'
 	Use StdIn: cat /path/to/xmlfile.xml | xmlp
-	CVS Output: xmlp -C https://www.w3schools.com/xml/plant_catalog.xml
+	CSV Output: xmlp -C https://www.w3schools.com/xml/plant_catalog.xml
 
 	Issues: Wider range of XML file testing, more intelligent choices
 
@@ -831,13 +856,14 @@ Usage()
 
 URL=''
 
-while getopts 'abCcdefhiK:kL:lm:n:Q:qrs:tVx?' o; do case "$o" in
+while getopts 'abCcdeE:fhiK:kL:lm:n:Q:qrs:tVx?' o; do case "$o" in
   'a')	ARRAYNUMS=$((1 - $ARRAYNUMS))		;;	# Toggle showing array item numbers
   'b')	IGNOREBLANK=$((1 - $IGNOREBLANK))	;;	# Don't print lines with no value
   'C')	OUTCSV=$((1 + $OUTCSV))				;;	# Output CSV format
   'c')	RAWCONTENT=$((1 + $RAWCONTENT))		;;	# Rawness of HTML ouput (parsed, HTML, raw)
   'd')	DEBUG=$((1 + $DEBUG))				;;
   'e')	EXPAND=$((1 + $EXPAND))				;;	# Expand output from compressed -> paths -> XML (XML not yet done)
+  'E')	EQC="$OPTARG"						;;	# Equal character
   'f')	ONLYFIRST=$((1 + $ONLYFIRST))		;;	# Return after finding first MATCH (-m)
   'h')	IGNOREXML=$((1 - $IGNOREXML))		;;	# Allow HTML?
   'i')	AUTOIDX=$((1 - $AUTOIDX))			;;	# Array detector
@@ -853,6 +879,7 @@ while getopts 'abCcdefhiK:kL:lm:n:Q:qrs:tVx?' o; do case "$o" in
   's')	SUFFIX="$OPTARG"					;;	# Only print lines whose value ends with SUFFIX (e.g. .jpg)
   't')	IGNORELAYOUT=$((1 - $IGNORELAYOUT))	;;	# Ignore content layout
   'V')	OUTKVO=$((1 + $OUTKVO))				;;	# Output KVO format
+  'y')	OUTYML=$((1 + $OUTYML))				;;	# Output YAML
   'x')	OUTXML=$((1 + $OUTXML))				;;	# Output XML again
   '?')	Usage; exit 0						;;
   *)	Msg "Unknown option: $1"			;;

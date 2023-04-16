@@ -1,67 +1,87 @@
 #!/bin/sh
 
 #	History
-#	GLK	001	230312	Better AML checking with enabled output
+#	GLK	001	230312	Better AML checking with enabled output, use expanded parse for kext too
+
+# Command Options
+HERE=0	# Test it in CWD even if it has its own Kexts/ACPI subdirs
 
 Msg()	{ echo "$(date +%s)	$@" >&2; }
 Err()	{ echo "++++++++	$@" >&2; }
 
 Usage()
  {
-	Msg "	$0 [config.plist ...]
+	Msg "	$0 [-p] [-v] [config.plist ...]
 
-	Check existance in kext folder relative to input file of kext(s) and output version(s).
+	-p	Test in current working directory, not where config lies
+	-v	Verbose
+
+	Check existance in kext/acpi folders relative to
+	 input file (or PWD if no such folder next to input)
+	 of kext(s)/acpi(s) and output version(s)/path(s)
 "
+ }
+
+KextOutput()
+ {
+	# In WD BundlePath Enabled ExecutablePath
+	local	c b e p line cmt plp
+	c="$1"; b="$2"; e="$3"; p="$4"; plp="$5"; cmt="$6"
+
+	if [ -d "$c/$b" ]; then
+		line=$(kext-version "$c/$b")
+		[ "$e" = '~false' ] && line="- 	$line" || line="++	$line"
+		[ -e "$c/$b/$p" ] && line="${line} [$p]" || line="${line} [*** $p NOT FOUND in $b ***]"
+		if [ "$b" != "${b#*/}" ]; then
+			Msg ">	Subfolder in ${b%%/*}"
+		fi
+		[ -f "$c/$b/$plp" ] || Err "Info.plist not found in $c/$b/$plp"
+		[ -n "$cmt" ] && line="$line [$cmt]"
+		Msg "$line"
+	else
+		Err "Kext not found: $b"
+	fi
  }
 
 CheckKext()
  {
-	local	line p last k tag
+	#	%Kernel%Add/#1%Arch/string=Any
+	local	line p last k t v idx aA aB aC aE aP aL
 
 	p="$1"
 	p="${p%/*}"
 	[ "$p" = "$1" ] && p='' || p="${p}/"
-	p="${p}Kexts"
+	[ -d "${p}/Kexts" -a $HERE -eq 0 ] && p="${p}Kexts" || p='./Kexts'	# Run in CWD?
 
 	Msg '-----------------------------------------'
 	Msg '-		KEXT			-'
 
+	last=1
 	while read line; do if [ -n "$line" ]; then
-#		Msg "Checking: $p/$line in $i"
+		idx="${line#*#}";	idx="${idx%%%*}"				# Array index
+		t="${line%%=*}";	t="${t##*%}"; t="${t%%/*}"		# Tag
+		v="${line#*=}"										# Value
 
-#	%DeviceProperties%Kernel%Add/#%BundlePath/string=Lilu.kext
-# ...
-#	./#%BundlePath/string=IntelMausi.kext
-#	./#%Comment/string=
-#	./#%Enabled=~true
-#	./#%ExecutablePath/string=Contents/MacOS/IntelMausi
+		if [ "$idx" != "$last" ]; then
+			# Output one
+			last=$idx
+			KextOutput "$p" "$aB" "$aE" "$aP" "$aL" "$aC"
+			aB='' ; aE='' ; aP=''
+		fi
 
-		tag="${line##*%}"
-		line="${tag#*=}"
-		tag="${tag%%[/=]*}"
-
-		case "$tag" in
-		  'BundlePath')
-			[ -n "$last" ] && Msg "$last" && last=''
-			k="$p/$line"
-			if [ -d "$k" ]; then
-				last=$(kext-version "$p/$line")
-			else
-				k=''
-				Err "Not found: $line"
-			fi
-		  ;;
-		 'Enabled')
-			[ "$line" = '~false' ] && last="- 	$last" || last="++	$last"
-		  ;;
-		  'ExecutablePath')
-			if [ -n "$k" ]; then
-				[ -e "$k/$line" ] && last="${last} [$line]" || last="${last} [*** $line NOT FOUND ***]"
-			fi
-		  ;;
+		case "$t" in
+		  'Arch')			aA="$v"	;;
+		  'BundlePath')		aB="$v"	;;
+		  'Comment')		aC="$v"	;;
+		  'Enabled')		aE="$v"	;;
+		  'ExecutablePath')	aP="$v"	;;
+		  'PlistPath')		aL="$v"	;;
+		  'MinKernel'|'MaxKernel')	;;
+		  *)				Err "Unexpected tag [$t] in: $line"	;;
 		esac
 	fi; done
-	[ -n "$last" ] && Msg "$last" && last=''
+
+	KextOutput "$p" "$aB" "$aE" "$aP" "$aL" "$aC"
  }
 
 ListMedium()
@@ -77,17 +97,22 @@ ListMedium()
 	done
  }
 
-AmlCheck()
+AmlOutput()
  {
 	local	e o t n
-	o=$(ls -l "$3" 2>/dev/null | ListMedium)
-	n=$((40 - ${#o}))
-	while [ $n -gt 0 ]; do
-		t="$t	"
-		n=$(($n - 8))
-	done
-	[ "$2" = "${2%false}" ] && e='++' || e='- '
-	Msg "$e	$o	$t$1"
+
+	if [ ! -e "$3" ]; then
+		Err "$3 not found"
+	else
+		o=$(ls -l "$3" 2>/dev/null | ListMedium)	
+		n=$((40 - ${#o}))
+		while [ $n -gt 0 ]; do
+			t="$t	"
+			n=$(($n - 8))
+		done
+		[ "$2" = "${2%false}" ] && e='++' || e='- '
+		Msg "$e	$o	$t$1"
+	fi
  }
 
 CheckAml()
@@ -101,7 +126,7 @@ CheckAml()
 	p="$1"
 	p="${p%/*}"
 	[ "$p" = "$1" ] && p='' || p="${p}/"
-	p="${p}ACPI"
+	[ -d "${p}/ACPI" -a $HERE -eq 0 ] && p="${p}ACPI" || p='./ACPI'		# Run in CWD?	
 
 	Msg '-----------------------------------------'
 	Msg "-		ACPI in $p		-"
@@ -112,22 +137,33 @@ CheckAml()
 		t="${line%%=*}";	t="${t##*%}"; t="${t%%/*}"		# Tag
 		v="${line#*=}"										# Value
 
-		[ "$idx" != "$last" ] && last=$idx && AmlCheck "$aC" "$aE" "$p/$aP"
+		if [ "$idx" != "$last" ]; then
+			# Output one
+			last=$idx
+			AmlOutput "$aC" "$aE" "$p/$aP"
+			aC='' ; aE='' ; aP=''
+		fi
 
 		case "$t" in
 		  'Comment')	aC="$v"	;;
 		  'Enabled')	aE="$v"	;;
 		  'Path')		aP="$v"	;;
-		  *)			Msg "Syntax error in: $line"	;;
+		  *)			Err "Unexpected tag [$t] in: $line"	;;
 		esac
 #		Msg $(ls -l "$p/$line")
 	done
 
-	AmlCheck "$aC" "$aE" "$p/$aP"
+	AmlOutput "$aC" "$aE" "$p/$aP"
  }
 
-KextCheck() {	xmlp -a -s kext -n 4 "$1" | CheckKext "$1"; }
+KextCheck() {	xmlp -e -m '%Kernel%Add' "$1" | CheckKext "$1"; }
 AcpiCheck() {	xmlp -e -m '%ACPI%Add' "$1" | CheckAml "$1"; }
+
+while getopts 'pv' o; do case "$o" in
+  p)	HERE=1					;;
+  v)	DEBUG=$((1 + $DEBUG))	;;
+esac; done
+shift $(($OPTIND - 1))
 
 for i in "$@"; do
 	if [ -r "$i" ]; then

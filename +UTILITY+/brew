@@ -1,4 +1,9 @@
 #!/bin/sh
+
+# /usr/local not so friendly (no mount point, no chown) after Big Sur
+
+
+
 URL='https://github.com/Homebrew/brew.git'
 
 INSTALL='/usr/local'
