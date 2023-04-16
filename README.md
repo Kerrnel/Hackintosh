@@ -1,4 +1,4 @@
-# Ackintosh
+# Various Opencore Configurations for 11+ motherboards
 
 <H3>Latest OpenCore folders for</H3>
 
