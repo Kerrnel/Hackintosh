@@ -5,8 +5,8 @@
 ```
 ASRock H370-itx
 ASRock Z390-itx + RX 580 XT
-ASRock H570-itx + RX 6900 XT (coming soon)
-ASMini 300W
+ASRock H570-itx + RX 6900 XT
+ASRock Deskmini 310W
 EGlobal S500 (i9-10885H)
 Hystou 7500U
 Hystou 8500U
@@ -22,4 +22,4 @@ These Eglobal / Hystou / Kingdel / Morefine / etc. computers seem to come from t
 Refind for multibooting is included +UTILITY+ and some scripts
 ```
 
-Latest OS - Ventura 13.2
+Latest OS - Ventura 13.3.1
