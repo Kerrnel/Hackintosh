@@ -11,6 +11,7 @@
 		Ether:			
 
 		History
+		008	GLK	230417	0.91: Second SATA SSD killed first SATA SSD recognition in MacOS - presume it needs the CtlnaAHCI kext
 		007	GLK	230409	0.91: Easter update
 		006	GLK	221202	0.86: csr AwAAAA change
 		005	GLK	221008	0.84: Remove obsolete
@@ -184,18 +185,28 @@
 		<array>
 			<dict>
 				<key>Arch</key>				<string>Any</string>
+				<key>BundlePath</key>		<string>CtlnaAHCIPort.kext</string>
+				<key>Comment</key>			<string>Catalina's AHCI driver for Intel PCH SATA (2nd drive kills first drive issue on Ventura)</string>
+				<key>Enabled</key>			<true/>
+				<key>ExecutablePath</key>	<string>Contents/MacOS/CtlnaAHCIPort</string>
+				<key>MaxKernel</key>		<string></string>
+				<key>MinKernel</key>		<string>29.0.0</string>
+				<key>PlistPath</key>		<string>Contents/Info.plist</string>
+			</dict>
+			<dict>
+				<key>Arch</key>				<string>Any</string>
 				<key>BundlePath</key>		<string>Lilu.kext</string>
-				<key>Comment</key>			<string></string>
+				<key>Comment</key>			<string>Core kext functions for others</string>
 				<key>Enabled</key>			<true/>
 				<key>ExecutablePath</key>	<string>Contents/MacOS/Lilu</string>
 				<key>MaxKernel</key>		<string></string>
-				<key>MinKernel</key>	  <string>8.0.0</string>
+				<key>MinKernel</key>		<string>8.0.0</string>
 				<key>PlistPath</key>		<string>Contents/Info.plist</string>
 			</dict>
 			<dict>
 				<key>Arch</key>				<string>Any</string>
 				<key>BundlePath</key>		<string>VirtualSMC.kext</string>
-				<key>Comment</key>			<string></string>
+				<key>Comment</key>			<string>Fake SMC device needed for all Hackintosh</string>
 				<key>Enabled</key>			<true/>
 				<key>ExecutablePath</key>	<string>Contents/MacOS/VirtualSMC</string>
 				<key>MaxKernel</key>		<string></string>
@@ -205,7 +216,7 @@
 			<dict>
 				<key>Arch</key>				<string>Any</string>
 				<key>BundlePath</key>		<string>SMCProcessor.kext</string>
-				<key>Comment</key>			<string></string>
+				<key>Comment</key>			<string>Expose SMC processor APIs</string>
 				<key>Enabled</key>			<true/>
 				<key>ExecutablePath</key>	<string>Contents/MacOS/SMCProcessor</string>
 				<key>MaxKernel</key>		<string></string>
@@ -215,7 +226,7 @@
 			<dict>
 				<key>Arch</key>				<string>Any</string>
 				<key>BundlePath</key>		<string>SMCSuperIO.kext</string>
-				<key>Comment</key>			<string></string>
+				<key>Comment</key>			<string>Expose SMC SuperIO APIs</string>
 				<key>Enabled</key>			<true/>
 				<key>ExecutablePath</key>	<string>Contents/MacOS/SMCSuperIO</string>
 				<key>MaxKernel</key>		<string></string>
@@ -245,7 +256,7 @@
 			<dict>
 				<key>Arch</key>				<string>Any</string>
 				<key>BundlePath</key>		<string>IntelMausi.kext</string>
-				<key>Comment</key>			<string></string>
+				<key>Comment</key>			<string>Intel Ethernet</string>
 				<key>Enabled</key>			<true/>
 				<key>ExecutablePath</key>	<string>Contents/MacOS/IntelMausi</string>
 				<key>MaxKernel</key>		<string></string>
@@ -616,11 +627,6 @@ chmod +x GenSMBIOS.command
 	Apple ROM:    E806885DCF77
 
 	convert Apple ROM to b64 with 'base' in tools or other method
-
- $ base 64 E806885DCF77
-Input  : E806885DCF77 (48 bits, base 16)
-Base 64: 6AaIXc93
-
 -->
 			<key>SystemProductName</key>	<string>Macmini8,1</string>
 			<key>SystemSerialNumber</key>	<string>C07G61ZNJYVX</string>
