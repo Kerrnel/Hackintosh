@@ -24,3 +24,6 @@ Refind for multibooting is included +UTILITY+ and some scripts
 ```
 
 Latest OS - Ventura 13.3.1
+
+**2025 update - I really only still run these on the H570 and Z390 with GPUs ; and the DeskMini ... all running 15.2 nowadays. If anyone wants an update - just ask. Slowly leaving for Linux/KDE6
+**
